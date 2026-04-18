@@ -175,7 +175,7 @@
 
 #### DownloadedFiles
 
-由数据批量获取节点写入。
+由数据批量获取节点(`nodes/data_download.py`, F18) 写入。节点内部顺序遍历 `DownloadManifest.items`,对每个 `DownloadTask` 先调 `csmar_probe_query` 拿 `validation_id`,再调 `csmar_materialize_query` 物化到 `<settings.downloads_root>/<utc_ts>/<database>_<table>/`,把 materialize 返回的 `files` 里每一条路径独立包装成一个 `DownloadedFile`。
 
 | 字段  | 类型                 | 说明         |
 | ----- | -------------------- | ------------ |
@@ -183,12 +183,12 @@
 
 **DownloadedFile**
 
-| 字段           | 类型      | 说明                                  |
-| -------------- | --------- | ------------------------------------- |
-| path           | str       | 文件路径                              |
-| source_table   | str       | 来源表                                |
-| key_fields     | list[str] | 从 DownloadTask 继承的主键/时间键字段 |
-| variable_names | list[str] | 该文件包含的变量                      |
+| 字段           | 类型      | 说明                                                     |
+| -------------- | --------- | -------------------------------------------------------- |
+| path           | str       | 物化后文件的绝对路径                                     |
+| source_table   | str       | 来源表(复制自对应 DownloadTask.table)                   |
+| key_fields     | list[str] | 从 DownloadTask 继承的主键/时间键字段                    |
+| variable_names | list[str] | 该 DownloadTask 声明的变量名(同一 task 拆分出的多个文件共享此列表,不做跨文件字段拆分;下游 F20 data_cleaning 负责跨文件拼接) |
 
 #### MergedDataset
 

@@ -26,6 +26,7 @@ class Settings:
     csmar_password: str
     stata_executable: str
     stata_edition: str
+    downloads_root: Path
 
 
 def _load_env() -> dict[str, str]:
@@ -55,6 +56,11 @@ def get_settings() -> Settings:
         )
         raise RuntimeError(msg)
 
+    downloads_root_raw = env.get("HARNESS_DOWNLOADS_ROOT")
+    downloads_root = (
+        Path(downloads_root_raw) if downloads_root_raw else PROJECT_ROOT / "downloads"
+    ).resolve()
+
     return Settings(
         dashscope_api_key=api_key,
         llm_model_name=env.get("LLM_MODEL", "qwen-plus"),
@@ -63,4 +69,5 @@ def get_settings() -> Settings:
         csmar_password=csmar_password,
         stata_executable=stata_executable,
         stata_edition=env.get("STATA_EXECUTOR_EDITION", "mp"),
+        downloads_root=downloads_root,
     )

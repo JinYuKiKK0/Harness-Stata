@@ -204,7 +204,7 @@
         "写入 DownloadedFiles 路径清单，单元测试 mock csmar 工具验证"
       ],
       "depends_on": ["F13", "F17"],
-      "passes": false
+      "passes": true
     },
     {
       "id": "F19",

@@ -2,47 +2,50 @@
 
 ## 当前焦点
 
-F17 完成：`nodes/hitl.py` 纯代码节点以 langgraph `interrupt()` 原语暂停图执行, 一次性呈递完整研究方案 (选题/样本/方程/变量表/Soft 替代溯源/预期符号/样本规模预估), 采集 approved/rejected 决策写入 `hitl_decision`, rejected 时联动写 `workflow_status="rejected"` 驱动主图条件边. 下一步推进 F18 (data_download 纯代码节点) 或 F20 (data_cleaning 用 generic_react).
+F18 完成: `nodes/data_download.py` 作为项目首个 async 节点,顺序遍历 `DownloadManifest.items`,对每个 DownloadTask 走 `csmar_probe_query` → `csmar_materialize_query` 两步,把 materialize 返回的每个文件路径独立包装成 DownloadedFile 写回 `downloaded_files`。失败即 raise(不做 partial success),下载落盘到 `<settings.downloads_root>/<utc_ts>/<database>_<table>/`。下一步推进 F25 (data_probe 节点包装, 为 F23 主图装配扫清依赖) 或 F20 (data_cleaning 借 F19 generic_react 产出 MergedDataset)——两者互相独立,可并行推进。
 
 ## 当前上下文
 
 <!-- 每个会话覆盖此部分。保持简洁。 -->
 
-- F17 完成:
-  - `src/harness_stata/nodes/hitl.py` (247 行, < 300 warn 阈值) 新增:
-    - `_INTERRUPT_TYPE = "hitl_plan_review"` 模块常量作为 F24 CLI/Web resume 的稳定契约
-    - `_SECTION_HEADERS` / `_ROLE_LABEL` 常量字典便于测试断言
-    - 7 个 `_format_*` 纯函数 (topic/sample/equation/variables_table/substitution_trace/core_hypothesis/sample_size), **全部无 I/O**, 保证 langgraph interrupt 重入语义下反复调用无副作用
-    - 样本规模预估取 min~max 区间 (基于所有非 None record_count), 避免单值误导
-    - `_validate` 三段校验: dict / approved:bool / approved=False 时 user_notes 必须非空
-    - `_request_decision` 循环: 最多 3 次 interrupt, 每次失败把 error msg 附回 payload 让调用方重填, 彻底失败抛 ValueError
-    - 主函数 `hitl(state)` 返回 approved 时 `{"hitl_decision":...}`, rejected 时附 `workflow_status:"rejected"`
-  - `tests/nodes/test_hitl.py` (246 行, 11 用例 全过):
-    - 5 条格式化纯函数用例 (full / no_substitution / all_counts / partial_counts / all_none)
-    - 6 条 hitl 节点用例 (approved_with_notes / approved_no_notes / rejected_valid / rejected_empty_notes_retries / rejected_persistent_invalid_raises / malformed_resume_raises)
-    - Mock 方案: `mocker.patch("harness_stata.nodes.hitl.interrupt", side_effect=...)` 在 import 站点打桩, 不引入 InMemorySaver + StateGraph (真实 interrupt/resume 留给 F23 集成测试)
-  - `tests/nodes/conftest.py` (195 行) 追加 3 个 factory fixture: `make_empirical_spec` / `make_model_plan` / `make_probe_report(substituted, missing_counts)`, 与 `mock_chat_model_for` 同风格, 可被 F18+ 下游节点测试复用
-  - `docs/state.md` 的 `hitl_decision` 小节追加 workflow_status 联动说明与 interrupt/Command(resume) 契约
-  - 设计取舍 (用户拍板):
-    - 交互机制 = langgraph `interrupt()` 原语而非同步阻塞 CLI: 为 F24 Web 端留路径, 节点纯函数重入安全
-    - user_notes = approved 可选 / rejected 必填非空: 保留拒因便于后续会话追溯
-    - 空 user_notes 兜底 = 二次 interrupt 最多 3 次, 而非首次 raise: 避免用户已填合法字段在图终止时丢失
-    - 交付边界 = 只做节点 + 单测, 不打通 CLI (F24) 和主图装配 (F23)
-  - pyright strict 处理: `_validate` 中 `isinstance(raw, dict)` 后用 `cast("dict[str, Any]", raw)` 消除 reportUnknownVariableType, 整个文件零 pyright ignore
-- 质量门禁 9/9 通过 (全仓 42/42 pytest, 新增 11 用例)
+- F18 完成:
+  - `src/harness_stata/config.py` 新增 `downloads_root: Path` 字段,默认 `<repo>/downloads`,可由 `.env` 的 `HARNESS_DOWNLOADS_ROOT` 覆盖;`.resolve()` 规范化为绝对路径
+  - `src/harness_stata/nodes/data_download.py` (194 行, < 300 warn 阈值):
+    - 3 个模块常量 (`_PROBE_TOOL_NAME` / `_MATERIALIZE_TOOL_NAME` / `_SESSION_TS_FORMAT`)
+    - 9 个纯辅助函数:`_validate` / `_make_session_dir` / `_make_task_dir` / `_tools_by_name` / `_build_probe_payload` / `_coerce_dict` / `_extract_validation_id` / `_extract_file_paths` / `_make_downloaded_files`
+    - 主函数 `async def data_download(state) -> dict[str, Any]`: 外层 `async with get_csmar_tools()`,内层串行遍历 DownloadTask;每 task 先 probe(校验 `can_materialize` + 取 `validation_id`)再 materialize(物化到 `<session_dir>/<database>_<table>/`)
+    - filters 当前只透传 `start_date` / `end_date`,其它键忽略(docstring 注明 TODO 留给 F20 暴露具体场景再补 CSMAR condition 字符串)
+    - 同 task 返回多文件时 `variable_names` 全量复制到每个 DownloadedFile(跨文件拼接责任下沉到 F20 data_cleaning)
+  - `tests/nodes/test_data_download.py` (240 行, 6 用例 全过):
+    - 3 条 success 用例 (single_task / multi_tasks / multi_files_per_task)
+    - 3 条 failure 用例 (probe_cannot_materialize_raises / materialize_raises_propagates / empty_manifest_raises)
+    - Mock 方案:patch `harness_stata.nodes.data_download.get_csmar_tools` 的 `side_effect` 为本地 `@asynccontextmanager`,内部 yield `MagicMock` 包装的 tool(`.name` + `AsyncMock` 的 `.ainvoke`);patch `get_settings` 返回 `MagicMock(downloads_root=tmp_path)` 以避免污染真实文件系统
+    - async 测试一律用 `asyncio.run(data_download(state))` 包裹成同步,不新增 pytest-asyncio 依赖(延续既有测试同步风格)
+  - `tests/nodes/conftest.py` 新增 `make_download_manifest` factory fixture (默认单 task 指向 CSMAR.FS_COMBAS),可被 F20 data_cleaning 测试复用
+  - `docs/state.md` 的 `DownloadedFiles` 小节补 F18 产出语义:materialize 每个 file path → 独立 DownloadedFile;`variable_names` 为 task 全量复制(不跨文件拆分)
+  - 设计取舍 (plan 拍板):
+    - **D1 async 节点**:node 为 `async def` 而非同步包 `asyncio.run` (MCP session 跨 event loop 不安全);连带 F24 CLI 入口需用 `graph.ainvoke` / `graph.astream` + `asyncio.run(...)`,LangGraph 原生支持 async + sync 节点混合,不影响既有 hitl/requirement_analysis/model_construction 等 sync 节点
+    - **D2 两步 probe + materialize**:不复用 F15 的 validation_id (TTL + 跨阶段耦合风险);csmar-mcp 服务端有 `has_cached_download` 缓存,重复 probe 开销可忽略
+    - **D3 下载目录**:新增 config 字段而非节点内硬编码,遵循 F05 既定的 config 集中暴露原则;`<downloads_root>/<utc_ts>/<db>_<table>/` 分层降低重入冲突
+    - **D5 失败即 raise**:任一 task probe 不可物化或 materialize 抛错直接 raise,不做 partial success;F23 主图后续负责把 raise 映射为 `workflow_status="failed_hard_contract"`
+  - pyright strict 处理:对 `BaseTool.ainvoke` 沿用 probe_subgraph 的 `# pyright: ignore[reportUnknownMemberType]` 集中压制(2 处);`invalid_columns or []` 用 `cast("list[Any]", ...)` 避免 partial-unknown
+- 质量门禁 9/9 通过 (全仓 48/48 pytest, 新增 6 用例)
 
 ## 下一步
 
-1. F18: `nodes/data_download.py` 纯代码解析 `DownloadManifest` 调用 csmar-mcp 完成批量下载, 写 `DownloadedFiles`
+1. F25: `nodes/data_probe.py` 节点包装——绑定 csmar tools + 包装 `build_probe_subgraph()` 暴露为主图节点函数 (F23 直接依赖)
 2. F20: `nodes/data_cleaning.py` 借 F19 `build_react_subgraph` + 文件 IO/Python 执行工具产出 `MergedDataset`
-3. F25 (新增): `nodes/data_probe.py` 节点包装—绑定 csmar tools + 包装 `build_probe_subgraph()` 暴露为主图节点函数; F23 已增补 depends_on F25
+3. F21 / F22: 描述性统计与基准回归节点 (依赖 F20 的 MergedDataset)
+4. F23: 主图装配 (等 F20 / F21 / F22 / F25 就绪)
+5. F24: CLI 入口 (等 F23 就绪, 需用 asyncio.run + graph.ainvoke 适配 F18 引入的 async 模式)
 
 ## 未解决/卡点
 
 - pyright strict 下 ChatTongyi 缺少部分类型桩, clients/llm.py 中有 type: ignore 注释
 - WorkflowState total=False 导致所有 state key 访问需要 type: ignore[reportTypedDictNotRequiredAccess]
-- langgraph 1.1.6 缺少公开类型桩, `StateGraph.add_node` / `.compile()`, `BaseChatModel.bind_tools()` / `.with_structured_output()`, `BaseTool.invoke()`, `Runnable.invoke()` 被 pyright strict 判 reportUnknownMemberType, 统一通过 `# pyright: ignore[reportUnknownMemberType]` 压制
+- langgraph 1.1.6 缺少公开类型桩, `StateGraph.add_node` / `.compile()`, `BaseChatModel.bind_tools()` / `.with_structured_output()`, `BaseTool.invoke()` / `.ainvoke()`, `Runnable.invoke()` 被 pyright strict 判 reportUnknownMemberType, 统一通过 `# pyright: ignore[reportUnknownMemberType]` 压制
 - ruff RUF001/RUF002 对中文全角标点与同形希腊字母的检查: docstring 与 Field description 中避免使用全角标点 (逗号/句号/括号等) 与 α/β/γ
 - 主 `.venv` 缺 `prettytable` (csmarapi 的运行时依赖): `scripts/check.py` 已 9/9 通过, 但若要手动跑 csmar-mcp 子包单元测试会 ImportError; 修复方案待定
 - `packages/stata-executor/` 的 ruff/pyright 收口尚未做 (类比 csmar-mcp 已完成的技术债), 留给独立会话
-- `subgraphs/probe_subgraph.py` 当前 492 行触发 check_file_size warn (>300, <500 fail). 下一次本文件实质性扩展前应拆出 `_probe_helpers.py`
+- `subgraphs/probe_subgraph.py` 当前 487 行触发 check_file_size warn (>300, <500 fail). 下一次本文件实质性扩展前应拆出 `_probe_helpers.py`
+- F18 引入的 async 节点模式需在 F24 CLI 统一入口用 `asyncio.run(graph.ainvoke(...))`,并在 F25 / F20 / F21 / F22 四个节点保持一致的 async def 签名
