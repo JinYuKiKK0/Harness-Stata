@@ -192,13 +192,14 @@
 
 #### MergedDataset
 
-由数据清洗节点写入。
+由数据清洗节点写入。post-condition 分层失败策略：主键重复视为硬错误直接 raise RuntimeError，不会写入本切片；覆盖率不足（EmpiricalSpec.variables 中某变量缺列或非空率低于阈值）视为软告警，累积到 `warnings` 字段，供下游 F21/F22 参考。
 
-| 字段      | 类型      | 说明           |
-| --------- | --------- | -------------- |
-| file_path | str       | 合并后长表路径 |
-| row_count | int       | 行数           |
-| columns   | list[str] | 列名清单       |
+| 字段      | 类型      | 说明                                                                                      |
+| --------- | --------- | ----------------------------------------------------------------------------------------- |
+| file_path | str       | 合并后长表路径                                                                            |
+| row_count | int       | 行数                                                                                      |
+| columns   | list[str] | 列名清单                                                                                  |
+| warnings  | list[str] | post-condition 软告警列表（变量覆盖率不足、列名缺失等）；主键重复属硬错误 raise 不入此列表 |
 
 #### DescStatsReport
 

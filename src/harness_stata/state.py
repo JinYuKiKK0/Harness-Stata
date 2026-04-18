@@ -128,6 +128,7 @@ class MergedDataset(TypedDict):
     file_path: str
     row_count: int
     columns: list[str]
+    warnings: list[str]
 
 
 class DescStatsReport(TypedDict):

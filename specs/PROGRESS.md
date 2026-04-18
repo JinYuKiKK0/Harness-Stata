@@ -2,64 +2,55 @@
 
 ## 当前焦点
 
-F25 完成: `nodes/data_probe.py` 用 async 外壳包装 `build_probe_subgraph()`——`async with get_csmar_tools()` 拿工具、`load_prompt("data_probe")` 注入 system prompt、`get_settings().per_variable_max_calls` 提供预算,构造 `ProbeState` 初值后同步 `.invoke()` 子图,再把 `probe_report` / `download_manifest` (必出) + `empirical_spec` (soft 替代时) + `workflow_status` (hard_failure 时) 回传 WorkflowState。F23 主图装配的剩余阻塞只剩 F20/F21/F22。下一步推进 F20 (`data_cleaning` 借 F19 generic_react 产出 `MergedDataset`) 作为 F21/F22 的前置依赖。
+F20 完成: `nodes/data_cleaning.py` 作为第二个 async 节点,借 F19 `build_react_subgraph` 驱动 ReAct 循环,绑定单一 `run_python` REPL 工具(持久 namespace 预置 `pd`/`Path`),让 LLM 完成跨表主键对齐 + 宽长转换 + snake_case 列名规范,产出单一 `merged.csv` 到 `<session_dir>/merged.csv`;节点本身负责 JSON 解析 + 分层 post-condition(主键重复 raise、覆盖率<0.8 写入新字段 `MergedDataset.warnings`)。F23 主图装配的剩余阻塞只剩 F21/F22。下一步 F21(描述性统计)或 F22(基准回归),均依赖 F20 的 `MergedDataset`,两者可并行推进。
 
 ## 当前上下文
 
 <!-- 每个会话覆盖此部分。保持简洁。 -->
 
-- F25 完成:
-  - `src/harness_stata/config.py` Settings 追加 `per_variable_max_calls: int`,从 `.env` 的 `HARNESS_PER_VARIABLE_MAX_CALLS` 读取,默认 4;非法值(非整数或 <1)抛 RuntimeError,与其他字段校验风格一致
-  - `src/harness_stata/nodes/data_probe.py` (83 行, 远低于 300 warn 阈值):
-    - `async def data_probe(state) -> dict[str, Any]`: 外层 `async with get_csmar_tools()` 管理 MCP 生命周期,内层用工厂编译子图后**同步** `.invoke(initial)` (非 ainvoke,子图内部 ReAct 是手写同步循环)
-    - 字段映射最小化原则:probe_report/download_manifest 必回传;empirical_spec **仅在子图重建了新对象时**回传 (用 `final_spec is not spec` 判断);workflow_status 仅在 `failed_hard_contract` 时回传
-    - 不主动 raise hard_failure——子图已置 `workflow_status`,节点只透传,由 F23 主图 conditional edge 负责路由到 END
-    - `_validate` 捕获 empirical_spec/model_plan 缺失与 variables 空列表,抛 ValueError (与 F18 data_download 风格一致)
-  - `tests/nodes/test_data_probe.py` (230 行, 7 用例全过):
-    - Mock 到 subgraph 层(per F25 step 4): patch `build_probe_subgraph` 返回 `MagicMock`,预设 `.invoke.return_value = <fake ProbeState>`;不重复 F15/F16 已覆盖的 subgraph 内部行为
-    - 3 条 happy path (all found / soft substitute / hard failure) 验证字段映射;3 条 validation 用例 (missing spec/plan/empty variables) → ValueError;1 条异常透传用例验证 subgraph 抛错时节点不吞错且 csmar tools async cm 正常退出
-  - 设计取舍:
-    - **per_variable_max_calls 放 config.Settings** 而非硬编码常量:延续 F18 downloads_root 的 pattern,后续调优走 `.env` 而非改代码;`.env` 未显式设置时默认 4 (与 data_probe.md prompt 里 "三四步内没有结论" 的预算意识对齐)
-    - **测试粒度 mock 到 subgraph**:F25 是纯外壳层,F15/F16 已对子图内部做过充分单元覆盖,重复编排 LLM/tools mock 只会加测试脆弱性
-    - **empirical_spec 用 `is not` 判断回写**:避免原样透传当前虽无 reducer 影响,但语义上明确区分 "未变更 = 不回传" vs "变更 = 显式覆写",给未来引入 reducer 留余地
-  - 质量门禁 9/9 通过 (pytest 55/55 含新增 7 用例, 全部 lint + pyright + import-linter 通过)
-- 先前 F18 完成内容见 git log b7c300b
-  - `src/harness_stata/config.py` 新增 `downloads_root: Path` 字段,默认 `<repo>/downloads`,可由 `.env` 的 `HARNESS_DOWNLOADS_ROOT` 覆盖;`.resolve()` 规范化为绝对路径
-  - `src/harness_stata/nodes/data_download.py` (194 行, < 300 warn 阈值):
-    - 3 个模块常量 (`_PROBE_TOOL_NAME` / `_MATERIALIZE_TOOL_NAME` / `_SESSION_TS_FORMAT`)
-    - 9 个纯辅助函数:`_validate` / `_make_session_dir` / `_make_task_dir` / `_tools_by_name` / `_build_probe_payload` / `_coerce_dict` / `_extract_validation_id` / `_extract_file_paths` / `_make_downloaded_files`
-    - 主函数 `async def data_download(state) -> dict[str, Any]`: 外层 `async with get_csmar_tools()`,内层串行遍历 DownloadTask;每 task 先 probe(校验 `can_materialize` + 取 `validation_id`)再 materialize(物化到 `<session_dir>/<database>_<table>/`)
-    - filters 当前只透传 `start_date` / `end_date`,其它键忽略(docstring 注明 TODO 留给 F20 暴露具体场景再补 CSMAR condition 字符串)
-    - 同 task 返回多文件时 `variable_names` 全量复制到每个 DownloadedFile(跨文件拼接责任下沉到 F20 data_cleaning)
-  - `tests/nodes/test_data_download.py` (240 行, 6 用例 全过):
-    - 3 条 success 用例 (single_task / multi_tasks / multi_files_per_task)
-    - 3 条 failure 用例 (probe_cannot_materialize_raises / materialize_raises_propagates / empty_manifest_raises)
-    - Mock 方案:patch `harness_stata.nodes.data_download.get_csmar_tools` 的 `side_effect` 为本地 `@asynccontextmanager`,内部 yield `MagicMock` 包装的 tool(`.name` + `AsyncMock` 的 `.ainvoke`);patch `get_settings` 返回 `MagicMock(downloads_root=tmp_path)` 以避免污染真实文件系统
-    - async 测试一律用 `asyncio.run(data_download(state))` 包裹成同步,不新增 pytest-asyncio 依赖(延续既有测试同步风格)
-  - `tests/nodes/conftest.py` 新增 `make_download_manifest` factory fixture (默认单 task 指向 CSMAR.FS_COMBAS),可被 F20 data_cleaning 测试复用
-  - `docs/state.md` 的 `DownloadedFiles` 小节补 F18 产出语义:materialize 每个 file path → 独立 DownloadedFile;`variable_names` 为 task 全量复制(不跨文件拆分)
+- F20 完成:
+  - `src/harness_stata/state.py` 的 `MergedDataset` TypedDict 新增 `warnings: list[str]` 字段;`docs/state.md` 同步补小节说明(主键重复属硬错误 raise 不入 warnings;覆盖率不足/列缺失入 warnings)
+  - `src/harness_stata/prompts/data_cleaning.md` 撰写完整 system prompt(角色 + 任务 + 可用工具 + 工作流程建议 + 终止契约);终止契约要求 LLM 最后一条消息不再发起 tool_call,content 直接输出 JSON `{"file_path": ..., "primary_key": [...]}`
+  - `src/harness_stata/nodes/data_cleaning.py` (252 行, <300 warn 阈值):
+    - 模块常量:`_MAX_ITERATIONS = 30` / `_MERGED_FILENAME = "merged.csv"` / `_COVERAGE_THRESHOLD = 0.8` / `_FENCE_RE`(剥离 markdown 围栏的正则)
+    - `_make_python_tool()`: 闭包工厂,每次调用产生新的持久 namespace dict(预置 `pd` + `Path`),@tool 装饰的 `run_python(code)` 用 `exec(code, namespace)` + `redirect_stdout` 执行并捕获 stdout/异常消息,无沙箱(MVP 本地单机)
+    - `_validate` / `_derive_output_path`(从 `DownloadedFile.path` 的 parents[1] 推导,不新增 config) / `_build_human_prompt`(拼装 EmpiricalSpec + 源文件清单 + 输出路径给 HumanMessage)
+    - `_extract_final_json` / `_extract_primary_key`: 解析 AIMessage.content 的 JSON(支持 markdown 围栏)
+    - `_check_post_conditions`: pandas 读 csv 后,先查 primary_key 列存在性与唯一性(raise),再逐变量做 `_find_variable_column` 归一化匹配(lower + 去下划线)+ 非空率覆盖(<0.8 入 warnings;列缺失入 warnings)
+    - 主函数 `async def data_cleaning(state) -> dict[str, Any]`: 验证 → 构造工具+子图 → `await subgraph.ainvoke` → 检查 messages 非空 + 最后 AIMessage + tool_calls 为空(非空 raise max_iterations) → 解析 JSON → post-condition → 写 `merged_dataset`
+  - `tests/nodes/test_data_cleaning.py` (6 用例全过):
+    - 3 条 success (single_table / multi_source_files / coverage_and_missing_column_warn 分层软告警)
+    - 3 条 failure (duplicate_primary_key_raises / react_truncation_raises / missing_downloaded_files_raises)
+    - Mock 方案:patch `harness_stata.nodes.data_cleaning.build_react_subgraph` 返回一个 MagicMock,其 `.ainvoke` 是 AsyncMock 返回 `{"messages": [AIMessage(...)], "iteration_count": 1}`;测试内预先用 pandas 在 `tmp_path` 下按 F18 session 布局(`downloads/session1/<db_table>/`)创建源 csv + 预期输出 `merged.csv`,让 `_derive_output_path` 与 post-condition 能跑
+    - async 测试统一 `asyncio.run(data_cleaning(state))` 包同步,延续 F18 约定
   - 设计取舍 (plan 拍板):
-    - **D1 async 节点**:node 为 `async def` 而非同步包 `asyncio.run` (MCP session 跨 event loop 不安全);连带 F24 CLI 入口需用 `graph.ainvoke` / `graph.astream` + `asyncio.run(...)`,LangGraph 原生支持 async + sync 节点混合,不影响既有 hitl/requirement_analysis/model_construction 等 sync 节点
-    - **D2 两步 probe + materialize**:不复用 F15 的 validation_id (TTL + 跨阶段耦合风险);csmar-mcp 服务端有 `has_cached_download` 缓存,重复 probe 开销可忽略
-    - **D3 下载目录**:新增 config 字段而非节点内硬编码,遵循 F05 既定的 config 集中暴露原则;`<downloads_root>/<utc_ts>/<db>_<table>/` 分层降低重入冲突
-    - **D5 失败即 raise**:任一 task probe 不可物化或 materialize 抛错直接 raise,不做 partial success;F23 主图后续负责把 raise 映射为 `workflow_status="failed_hard_contract"`
-  - pyright strict 处理:对 `BaseTool.ainvoke` 沿用 probe_subgraph 的 `# pyright: ignore[reportUnknownMemberType]` 集中压制(2 处);`invalid_columns or []` 用 `cast("list[Any]", ...)` 避免 partial-unknown
-- 质量门禁 9/9 通过 (全仓 48/48 pytest, 新增 6 用例)
+    - **D1 Python 工具形态**:单一 `run_python` REPL 工具(vs 声明式 read_csv/merge/write_csv 工具集 / 混合方案);优先 prompt 最短 + LLM 最灵活
+    - **D2 工具代码位置**:`@tool` 装饰器就地写在 `nodes/data_cleaning.py` 内(vs 新建 tools/ 包);控制文件 ≤300 行
+    - **D3 失败分层**:主键重复/缺列/ReAct 截断/LLM 未落盘 → `RuntimeError`;变量覆盖率<0.8/变量列缺失 → 写入 `MergedDataset.warnings`,下游 F21/F22 决策是否继续
+    - **D4 输出落盘**:从 `DownloadedFile.path` 推导 `parents[1] / "merged.csv"` 落在 F18 session 目录根部,不新增 config
+    - **D5 max_iterations = 30**:F15 per_variable_max_calls=8,F20 跨表更复杂,初值 30
+  - pyright strict 处理:`@tool` 装饰器被识别为 partial-unknown → 行级 `# pyright: ignore[reportUntypedFunctionDecorator, reportUnknownVariableType, reportUnknownArgumentType]`;pandas `pd.read_csv` / `.duplicated().sum()` / `.notna().sum()` 同样 pyright ignore + `cast("Any", ...)` 包一层再 `int(...)`;`AIMessage.content` 类型是 `str | list[str|dict[Unknown,Unknown]]`,用 `cast("Any", last.content)` + isinstance 收敛
+- 质量门禁 9/9 通过 (全仓 61/61 pytest, 新增 6 用例)
+- 先前 F25 / F18 完成内容见 git log d11faa1 / b7c300b
 
 ## 下一步
 
-1. F20: `nodes/data_cleaning.py` 借 F19 `build_react_subgraph` + 文件 IO/Python 执行工具产出 `MergedDataset` (F21/F22 的前置依赖)
-2. F21 / F22: 描述性统计与基准回归节点 (依赖 F20 的 MergedDataset)
-3. F23: 主图装配 (等 F20 / F21 / F22 就绪, F25 已完成; 需绑定 checkpointer 以支持 F17 interrupt)
-4. F24: CLI 入口 (等 F23 就绪, 需用 asyncio.run + graph.ainvoke 适配 F18 引入的 async 模式, 并处理 HITL interrupt resume)
+1. F21: 描述性统计节点 (借 F19 generic_react + stata-executor,读 F20 产出的 MergedDataset)
+2. F22: 基准回归节点 (借 F19 generic_react + stata-executor,对照 ModelPlan.core_hypothesis.expected_sign 做符号校验)
+3. F23: 主图装配 (等 F21 / F22 就绪, F25 已完成; 需绑定 checkpointer 以支持 F17 interrupt)
+4. F24: CLI 入口 (等 F23 就绪, 需用 asyncio.run + graph.ainvoke 适配 F18/F20 引入的 async 模式, 并处理 HITL interrupt resume)
 
 ## 未解决/卡点
 
 - pyright strict 下 ChatTongyi 缺少部分类型桩, clients/llm.py 中有 type: ignore 注释
 - WorkflowState total=False 导致所有 state key 访问需要 type: ignore[reportTypedDictNotRequiredAccess]
 - langgraph 1.1.6 缺少公开类型桩, `StateGraph.add_node` / `.compile()`, `BaseChatModel.bind_tools()` / `.with_structured_output()`, `BaseTool.invoke()` / `.ainvoke()`, `Runnable.invoke()` 被 pyright strict 判 reportUnknownMemberType, 统一通过 `# pyright: ignore[reportUnknownMemberType]` 压制
+- `@tool` 装饰器在 pyright strict 下也需 `# pyright: ignore[reportUntypedFunctionDecorator, reportUnknownVariableType, reportUnknownArgumentType]` 压制(F20 引入的新模式,后续节点若再写 inline @tool 沿用)
+- pandas 在 pyright strict 下大量 reportUnknownMemberType (`.read_csv` / `.duplicated().sum()` / `.notna().sum()` / `.columns` 遍历),F20 采用 `cast("Any", ...)` + `# pyright: ignore` 的组合,后续 F21/F22 若直接用 pandas 可沿用
 - ruff RUF001/RUF002 对中文全角标点与同形希腊字母的检查: docstring 与 Field description 中避免使用全角标点 (逗号/句号/括号等) 与 α/β/γ
 - 主 `.venv` 缺 `prettytable` (csmarapi 的运行时依赖): `scripts/check.py` 已 9/9 通过, 但若要手动跑 csmar-mcp 子包单元测试会 ImportError; 修复方案待定
 - `packages/stata-executor/` 的 ruff/pyright 收口尚未做 (类比 csmar-mcp 已完成的技术债), 留给独立会话
 - `subgraphs/probe_subgraph.py` 当前 487 行触发 check_file_size warn (>300, <500 fail). 下一次本文件实质性扩展前应拆出 `_probe_helpers.py`
-- F18 引入的 async 节点模式需在 F24 CLI 统一入口用 `asyncio.run(graph.ainvoke(...))`,并在 F25 / F20 / F21 / F22 四个节点保持一致的 async def 签名
+- F18 + F20 引入的 async 节点模式需在 F24 CLI 统一入口用 `asyncio.run(graph.ainvoke(...))`,并在 F21 / F22 两个节点保持一致的 async def 签名
+- F20 `run_python` 工具当前直接用 `exec` + 闭包 namespace,无沙箱/子进程隔离(MVP 本地单机可接受);若将来走服务端需替换为子进程或 Docker,但不在当前范围
+- F20 `_COVERAGE_THRESHOLD = 0.8` 当前硬编码,若需按场景调整后续再提到 config
