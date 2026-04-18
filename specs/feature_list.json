@@ -259,9 +259,10 @@
         "StateGraph 装配 8 节点",
         "条件边路由函数实现",
         "子图组合接入主图",
+        "主图编译时绑定 checkpointer（InMemorySaver 或等价方案）以支持 HITL interrupt 暂停/续图",
         "编译并验证拓扑（END 出口正确、节点可达）"
       ],
-      "depends_on": ["F09", "F11", "F16", "F17", "F18", "F20", "F21", "F22"],
+      "depends_on": ["F09", "F11", "F16", "F17", "F18", "F20", "F21", "F22", "F25"],
       "passes": false
     },
     {
@@ -270,10 +271,23 @@
       "steps": [
         "typer 命令定义，接收 UserRequest 输入（核心 X/Y、样本/时间/频率）",
         "触发主图运行并落地 RegressionResult",
-        "端到端冒烟测试用 mocked LLM/MCP 跑通整条链路",
+        "CLI 捕获 HITL interrupt 事件（type=hitl_plan_review），渲染 payload.plan，采集 approved/rejected 决策并以 Command(resume=...) 续图；管理 thread_id 以认回 checkpoint",
+        "端到端冒烟测试用 mocked LLM/MCP 跑通整条链路（含 HITL approved/rejected 两分支）",
         "pytest 通过 + scripts/check.py 5/5 通过"
       ],
       "depends_on": ["F23"],
+      "passes": false
+    },
+    {
+      "id": "F25",
+      "description": "nodes/data_probe.py 节点包装—绑定 csmar 工具集、包装 build_probe_subgraph() 暴露为主图节点函数",
+      "steps": [
+        "通过 clients/csmar.get_csmar_tools() contextmanager 获取 csmar 工具集",
+        "调用 build_probe_subgraph(tools, per_variable_max_calls) 编译内层子图",
+        "节点函数实现主图 WorkflowState ↔ probe 子图 ProbeState 的输入/输出映射",
+        "单元测试覆盖字段映射与错误传播（mock tools + mock subgraph.invoke）"
+      ],
+      "depends_on": ["F13", "F15", "F16"],
       "passes": false
     }
   ]
