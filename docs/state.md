@@ -8,9 +8,9 @@
 
 子图有独立的 state schema，与主图通过显式输入/输出映射交换数据，内部状态不泄漏到主图。
 
-| 子图       | 从主图读入                              | 写回主图                                                                | 子图内部（不泄漏）                                                  |
-| ---------- | --------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| 数据探针   | EmpiricalSpec, ModelPlan                | ProbeReport, DownloadManifest, EmpiricalSpec\*(回写), ModelPlan\*(回写) | variable_queue, current_variable, per_variable_call_count, messages |
+| 子图       | 从主图读入                              | 写回主图                                                                                   | 子图内部（不泄漏）                                                                   |
+| ---------- | --------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| 数据探针   | EmpiricalSpec, ModelPlan                | ProbeReport, DownloadManifest, EmpiricalSpec\*(回写), workflow_status\*(hard_failure 时)   | variable_queue, current_variable, per_variable_call_count, messages, substitute_meta |
 | 数据清洗   | EmpiricalSpec, DownloadedFiles          | MergedDataset                                                           | messages, iteration_count                                           |
 | 描述性统计 | EmpiricalSpec, ModelPlan, MergedDataset | DescStatsReport                                                         | messages, iteration_count                                           |
 | 基准回归   | ModelPlan, MergedDataset                | RegressionResult                                                        | messages, iteration_count                                           |

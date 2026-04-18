@@ -182,7 +182,7 @@
         "产出 ProbeReport + DownloadManifest，单元测试覆盖三种分支"
       ],
       "depends_on": ["F15"],
-      "passes": false
+      "passes": true
     },
     {
       "id": "F17",

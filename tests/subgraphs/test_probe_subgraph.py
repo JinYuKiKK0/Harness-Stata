@@ -1,4 +1,4 @@
-"""Unit tests for the probe_subgraph factory (F15 skeleton)."""
+"""Unit tests for the probe_subgraph factory (F15 skeleton + F16 branching)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,11 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
 from harness_stata.state import EmpiricalSpec, VariableDefinition
-from harness_stata.subgraphs.probe_subgraph import ProbeState, build_probe_subgraph
+from harness_stata.subgraphs.probe_subgraph import (
+    ProbeState,
+    _VariableProbeFindingModel,
+    build_probe_subgraph,
+)
 
 # ---------------------------------------------------------------------------
 # Fake tools (no side effects, deterministic output)
@@ -34,17 +38,26 @@ def csmar_schema(table: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _wire_model(mocker: Any, responses: list[AIMessage]) -> MagicMock:
-    """Patch get_chat_model so that .bind_tools(...).invoke(...) returns responses in order."""
+def _wire_models(
+    mocker: Any,
+    *,
+    react_responses: list[AIMessage] | None = None,
+    extractor_findings: list[_VariableProbeFindingModel] | None = None,
+) -> tuple[MagicMock, MagicMock]:
+    """Patch get_chat_model so .bind_tools(...).invoke and .with_structured_output(...).invoke
+    return canned responses in order. Returns the (bound_react_mock, structured_extractor_mock)."""
     model = MagicMock()
     bound = MagicMock()
-    bound.invoke.side_effect = responses
+    bound.invoke.side_effect = react_responses or []
     model.bind_tools.return_value = bound
+    structured = MagicMock()
+    structured.invoke.side_effect = extractor_findings or []
+    model.with_structured_output.return_value = structured
     mocker.patch(
         "harness_stata.subgraphs.probe_subgraph.get_chat_model",
         return_value=model,
     )
-    return bound
+    return bound, structured
 
 
 def _tool_call(name: str, args: dict[str, Any], call_id: str) -> dict[str, Any]:
@@ -72,6 +85,40 @@ def _spec(variables: list[VariableDefinition]) -> EmpiricalSpec:
     )
 
 
+def _found(
+    *,
+    database: str = "CSMAR",
+    table: str = "TRD",
+    field: str = "ROA",
+    record_count: int = 1000,
+    key_fields: list[str] | None = None,
+    filters: dict[str, str] | None = None,
+) -> _VariableProbeFindingModel:
+    return _VariableProbeFindingModel(
+        status="found",
+        database=database,
+        table=table,
+        field=field,
+        record_count=record_count,
+        key_fields=key_fields if key_fields is not None else ["stkcd", "year"],
+        filters=filters if filters is not None else {"year": "2010-2020"},
+    )
+
+
+def _not_found(
+    *,
+    substitute_name: str | None = None,
+    substitute_description: str | None = None,
+    substitute_reason: str | None = None,
+) -> _VariableProbeFindingModel:
+    return _VariableProbeFindingModel(
+        status="not_found",
+        candidate_substitute_name=substitute_name,
+        candidate_substitute_description=substitute_description,
+        candidate_substitute_reason=substitute_reason,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Input validation
 # ---------------------------------------------------------------------------
@@ -88,13 +135,13 @@ class TestInputValidation:
 
 
 # ---------------------------------------------------------------------------
-# Empty queue: no LLM invocation, graph exits cleanly
+# Empty queue: no LLM invocation, downstream slices initialized
 # ---------------------------------------------------------------------------
 
 
 class TestEmptyQueue:
     def test_empty_variables_list_skips_llm(self, mocker: Any) -> None:
-        bound = _wire_model(mocker, [])
+        bound, structured = _wire_models(mocker)
 
         graph = build_probe_subgraph(
             tools=[csmar_probe], prompt="sys", per_variable_max_calls=3
@@ -102,13 +149,22 @@ class TestEmptyQueue:
         initial: ProbeState = {"empirical_spec": _spec([])}
         result = graph.invoke(initial)
 
-        # LLM was never called
+        # Neither react nor extractor was called
         assert bound.invoke.call_count == 0
+        assert structured.invoke.call_count == 0
 
         # Dispatcher initialised but left queue empty, current_variable cleared
         assert result["queue_initialized"] is True
         assert result["variable_queue"] == []
         assert result["current_variable"] is None
+
+        # F16: empty queue still initializes the downstream slices so HITL never KeyErrors
+        assert result["probe_report"] == {
+            "variable_results": [],
+            "overall_status": "success",
+            "failure_reason": None,
+        }
+        assert result["download_manifest"] == {"items": []}
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +175,11 @@ class TestEmptyQueue:
 class TestSingleVariableNaturalCompletion:
     def test_no_tools_on_first_turn(self, mocker: Any) -> None:
         ai_final = AIMessage(content="variable resolved: CSMAR.TRD.ROA")
-        bound = _wire_model(mocker, [ai_final])
+        bound, _ = _wire_models(
+            mocker,
+            react_responses=[ai_final],
+            extractor_findings=[_found()],
+        )
 
         graph = build_probe_subgraph(
             tools=[csmar_probe, csmar_schema],
@@ -162,7 +222,11 @@ class TestSingleVariableBudgetExhaustion:
         budget = 2
         # Need at least budget + 1 responses: loop invokes LLM once more than it executes tools
         responses = [_ai(i) for i in range(budget + 5)]
-        bound = _wire_model(mocker, responses)
+        bound, _ = _wire_models(
+            mocker,
+            react_responses=responses,
+            extractor_findings=[_not_found()],  # extractor sees no clear conclusion
+        )
 
         graph = build_probe_subgraph(
             tools=[csmar_probe], prompt="sys", per_variable_max_calls=budget
@@ -202,7 +266,14 @@ class TestTwoVariables:
         # Variable 2: immediate natural completion
         v2_final = AIMessage(content="v2 resolved")
 
-        bound = _wire_model(mocker, [v1_tool_a, v1_tool_b, v1_final, v2_final])
+        bound, _ = _wire_models(
+            mocker,
+            react_responses=[v1_tool_a, v1_tool_b, v1_final, v2_final],
+            extractor_findings=[
+                _found(field="V1"),
+                _found(field="V2"),
+            ],
+        )
 
         graph = build_probe_subgraph(
             tools=[csmar_probe], prompt="sys", per_variable_max_calls=5
@@ -231,3 +302,185 @@ class TestTwoVariables:
         # Queue drained
         assert result["variable_queue"] == []
         assert result["current_variable"] == _var("V2")
+
+
+# ---------------------------------------------------------------------------
+# F16: result_handler branches
+# ---------------------------------------------------------------------------
+
+
+class TestFoundSingleVariable:
+    def test_found_writes_manifest_and_report(self, mocker: Any) -> None:
+        ai_final = AIMessage(content="found at CSMAR.TRD.ROA")
+        finding = _found(database="CSMAR", table="TRD", field="ROA", record_count=12345)
+        _wire_models(mocker, react_responses=[ai_final], extractor_findings=[finding])
+
+        graph = build_probe_subgraph(
+            tools=[csmar_probe], prompt="p", per_variable_max_calls=3
+        )
+        result = graph.invoke({"empirical_spec": _spec([_var("ROA")])})
+
+        report = result["probe_report"]
+        assert report["overall_status"] == "success"
+        assert report["failure_reason"] is None
+        assert len(report["variable_results"]) == 1
+        vr = report["variable_results"][0]
+        assert vr["variable_name"] == "ROA"
+        assert vr["status"] == "found"
+        assert vr["source"] == {"database": "CSMAR", "table": "TRD", "field": "ROA"}
+        assert vr["record_count"] == 12345
+        assert vr["substitution_trace"] is None
+
+        items = result["download_manifest"]["items"]
+        assert len(items) == 1
+        assert items[0]["database"] == "CSMAR"
+        assert items[0]["table"] == "TRD"
+        assert items[0]["variable_fields"] == ["ROA"]
+        assert items[0]["variable_names"] == ["ROA"]
+        assert items[0]["key_fields"] == ["stkcd", "year"]
+
+
+class TestHardNotFound:
+    def test_hard_not_found_routes_end_with_workflow_status(self, mocker: Any) -> None:
+        ai_final = AIMessage(content="cannot find ROA in any csmar table")
+        _wire_models(
+            mocker,
+            react_responses=[ai_final],
+            extractor_findings=[_not_found()],
+        )
+
+        graph = build_probe_subgraph(
+            tools=[csmar_probe], prompt="p", per_variable_max_calls=3
+        )
+        result = graph.invoke(
+            {"empirical_spec": _spec([_var("ROA", contract="hard"), _var("LEV")])}
+        )
+
+        report = result["probe_report"]
+        assert report["overall_status"] == "hard_failure"
+        assert report["failure_reason"] is not None
+        assert "ROA" in report["failure_reason"]
+        assert result["workflow_status"] == "failed_hard_contract"
+        # Routed straight to END after first hard failure: never processed LEV
+        assert len(report["variable_results"]) == 1
+        assert report["variable_results"][0]["variable_name"] == "ROA"
+        assert report["variable_results"][0]["status"] == "not_found"
+        # Manifest stays empty for hard failure
+        assert result["download_manifest"]["items"] == []
+
+
+class TestSoftSubstituteSuccess:
+    def test_soft_substitute_writes_back_spec_and_manifest(self, mocker: Any) -> None:
+        # Round 1: original ROE not found, suggest ROA
+        ai_round1 = AIMessage(content="ROE not in csmar; suggest ROA")
+        finding1 = _not_found(
+            substitute_name="ROA",
+            substitute_description="ROA proxies ROE",
+            substitute_reason="similar economic meaning",
+        )
+        # Round 2: ROA found
+        ai_round2 = AIMessage(content="ROA found at CSMAR.TRD.ROA")
+        finding2 = _found(database="CSMAR", table="TRD", field="ROA")
+        _wire_models(
+            mocker,
+            react_responses=[ai_round1, ai_round2],
+            extractor_findings=[finding1, finding2],
+        )
+
+        graph = build_probe_subgraph(
+            tools=[csmar_probe], prompt="p", per_variable_max_calls=3
+        )
+        roe = _var("ROE", role="control", contract="soft")
+        result = graph.invoke({"empirical_spec": _spec([roe])})
+
+        report = result["probe_report"]
+        assert report["overall_status"] == "success"
+        assert len(report["variable_results"]) == 1
+        vr = report["variable_results"][0]
+        assert vr["variable_name"] == "ROE"
+        assert vr["status"] == "substituted"
+        assert vr["source"] == {"database": "CSMAR", "table": "TRD", "field": "ROA"}
+        trace = vr["substitution_trace"]
+        assert trace is not None
+        assert trace["original"] == "ROE"
+        assert trace["substitute"] == "ROA"
+        assert trace["reason"] == "similar economic meaning"
+
+        # EmpiricalSpec writeback: ROA replaces ROE in variables list
+        spec_vars = [v["name"] for v in result["empirical_spec"]["variables"]]
+        assert "ROA" in spec_vars
+        assert "ROE" not in spec_vars
+
+        # Manifest now contains the substitute under its new name
+        items = result["download_manifest"]["items"]
+        assert len(items) == 1
+        assert items[0]["variable_names"] == ["ROA"]
+        assert items[0]["variable_fields"] == ["ROA"]
+
+
+class TestSoftSubstituteFailure:
+    def test_substitute_chain_terminates_after_one_attempt(self, mocker: Any) -> None:
+        ai_round1 = AIMessage(content="ROE missing; suggest ROA")
+        finding1 = _not_found(
+            substitute_name="ROA",
+            substitute_description="d",
+            substitute_reason="r",
+        )
+        ai_round2 = AIMessage(content="ROA also missing")
+        finding2 = _not_found()  # no further substitute suggestion
+        bound, structured = _wire_models(
+            mocker,
+            react_responses=[ai_round1, ai_round2],
+            extractor_findings=[finding1, finding2],
+        )
+
+        graph = build_probe_subgraph(
+            tools=[csmar_probe], prompt="p", per_variable_max_calls=3
+        )
+        roe = _var("ROE", role="control", contract="soft")
+        result = graph.invoke({"empirical_spec": _spec([roe])})
+
+        report = result["probe_report"]
+        # Substitute itself failed: status=not_found, recorded under ORIGINAL name
+        assert len(report["variable_results"]) == 1
+        vr = report["variable_results"][0]
+        assert vr["variable_name"] == "ROE"
+        assert vr["status"] == "not_found"
+        # Soft does not block the workflow
+        assert report["overall_status"] == "success"
+        assert "workflow_status" not in result
+
+        # Exactly two react/extractor rounds — no third substitute generation
+        assert bound.invoke.call_count == 2
+        assert structured.invoke.call_count == 2
+        # Empty manifest since nothing was found
+        assert result["download_manifest"]["items"] == []
+
+
+class TestMultiVariableSameTable:
+    def test_two_variables_same_table_merge_into_one_task(self, mocker: Any) -> None:
+        ai1 = AIMessage(content="ROA at CSMAR.TRD.ROA")
+        ai2 = AIMessage(content="LEV at CSMAR.TRD.LEV")
+        finding1 = _found(database="CSMAR", table="TRD", field="ROA")
+        finding2 = _found(database="CSMAR", table="TRD", field="LEV")
+        _wire_models(
+            mocker,
+            react_responses=[ai1, ai2],
+            extractor_findings=[finding1, finding2],
+        )
+
+        graph = build_probe_subgraph(
+            tools=[csmar_probe], prompt="p", per_variable_max_calls=3
+        )
+        result = graph.invoke(
+            {"empirical_spec": _spec([_var("ROA"), _var("LEV", role="control")])}
+        )
+
+        items = result["download_manifest"]["items"]
+        assert len(items) == 1
+        assert items[0]["database"] == "CSMAR"
+        assert items[0]["table"] == "TRD"
+        assert sorted(items[0]["variable_fields"]) == ["LEV", "ROA"]
+        assert sorted(items[0]["variable_names"]) == ["LEV", "ROA"]
+        # key_fields deduped after merge
+        assert items[0]["key_fields"] == ["stkcd", "year"]
