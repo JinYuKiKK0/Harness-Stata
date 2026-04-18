@@ -39,6 +39,7 @@ packages = ["src/harness_stata"]
 target-version = "py312"
 line-length = 100
 src = ["src", "tests"]
+extend-exclude = ["packages/csmar-mcp/csmarapi"]
 
 [tool.ruff.lint]
 select = [

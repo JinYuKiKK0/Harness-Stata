@@ -18,6 +18,9 @@ from dataclasses import dataclass
 
 
 PATHS = ["src/harness_stata"]
+CSMAR_MCP_ROOT = "packages/csmar-mcp"
+CSMAR_MCP_PKG = f"{CSMAR_MCP_ROOT}/csmar_mcp"
+CSMAR_MCP_CONFIG = f"{CSMAR_MCP_ROOT}/pyproject.toml"
 
 
 @dataclass(frozen=True)
@@ -33,6 +36,9 @@ CHECKS: list[Check] = [
     Check("pyright", ["pyright"]),
     Check("import-linter", ["lint-imports"]),
     Check("custom lint", [sys.executable, "scripts/lint_custom.py"]),
+    Check("ruff lint (csmar-mcp)", ["ruff", "check", CSMAR_MCP_PKG, "--config", CSMAR_MCP_CONFIG]),
+    Check("ruff format (csmar-mcp)", ["ruff", "format", "--check", CSMAR_MCP_PKG, "--config", CSMAR_MCP_CONFIG]),
+    Check("pyright (csmar-mcp)", ["pyright", "-p", CSMAR_MCP_CONFIG]),
 ]
 
 

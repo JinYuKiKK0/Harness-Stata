@@ -5,7 +5,10 @@ __pycache__/
 .mypy_cache/
 .import_linter_cache/
 .ruff_cache/
-packages/
+#packages/
+packages/csmar-mcp/token.txt
+packages/csmar-mcp/csmar-log.log
+packages/csmar-mcp/.stata_agent/
 .agents/
 .claude/
 uv.lock
