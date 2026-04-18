@@ -193,7 +193,7 @@
         "写入 hitl_decision，conditional edge 路由通过"
       ],
       "depends_on": ["F16"],
-      "passes": false
+      "passes": true
     },
     {
       "id": "F18",

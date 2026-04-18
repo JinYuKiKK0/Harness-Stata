@@ -2,37 +2,39 @@
 
 ## 当前焦点
 
-F16 完成：`subgraphs/probe_subgraph.py` 的 `_result_handler` 已实质化, 探针子图能产出完整 `ProbeReport` + `DownloadManifest`, 并按 hard/soft 分支路由 (hard 失败立即写 `workflow_status="failed_hard_contract"` + END; soft 失败将候选替代塞回队列, 下一轮独立预算探测; 替代成功回写 `EmpiricalSpec.variables`). 下一步推进 F17 (HITL 节点) 或 F20 (data_cleaning 用 generic_react).
+F17 完成：`nodes/hitl.py` 纯代码节点以 langgraph `interrupt()` 原语暂停图执行, 一次性呈递完整研究方案 (选题/样本/方程/变量表/Soft 替代溯源/预期符号/样本规模预估), 采集 approved/rejected 决策写入 `hitl_decision`, rejected 时联动写 `workflow_status="rejected"` 驱动主图条件边. 下一步推进 F18 (data_download 纯代码节点) 或 F20 (data_cleaning 用 generic_react).
 
 ## 当前上下文
 
 <!-- 每个会话覆盖此部分。保持简洁。 -->
 
-- F16 完成:
-  - `src/harness_stata/subgraphs/probe_subgraph.py` (492 行, warn but < 500 fail) 新增:
-    - `_EXTRACTOR_PROMPT` 常量 (英文, 模块级) 用于 result_handler 二次 LLM 提取
-    - `_VariableProbeFindingModel` Pydantic schema (status / source / key_fields / filters / candidate_substitute_*)
-    - `_SubstituteMeta` TypedDict, 通过 `substitute_meta` 私有字段记账
-    - `ProbeState` 扩展 `workflow_status`, `substitute_meta` 两字段
-    - `_result_handler` 五分支: found / substituted / hard not_found (路由 END) / soft not_found 有替代 (入队) / soft not_found 无替代或替代失败 (record + 继续)
-    - `_route_after_handler` 新增 hard_failure 检测
-    - 模块级 helpers: `_extract_finding`, `_format_trace`, `_ensure_report/manifest`, `_build_*`, `_merge_into_manifest` (按 (database, table) 合并 DownloadTask), `_replace_variable_in_spec`, `_maybe_build_substitute`
-  - `src/harness_stata/prompts/data_probe.md` (60 行) system prompt 撰写完成: 角色 / 工具 / 探测策略 / 终止契约 / hard-soft 差异 / 跨频率替代禁令 / 预算意识
-  - `tests/subgraphs/test_probe_subgraph.py` (11 用例, 全过):
-    - 修改: `TestEmptyQueue` 加 probe_report/download_manifest 初始化断言
-    - 修改: 既有 3 个 react 用例追加 extractor_findings mock
-    - 新增: `TestFoundSingleVariable` / `TestHardNotFound` / `TestSoftSubstituteSuccess` / `TestSoftSubstituteFailure` / `TestMultiVariableSameTable` 5 个 F16 分支用例
-    - `_wire_models` helper 同时打桩 `bind_tools().invoke` 与 `with_structured_output().invoke` 两条调用流
-  - `docs/state.md` §2 表格同步: 数据探针 "写回主图" 列删除 `ModelPlan*(回写)`, 追加 `workflow_status*(hard_failure 时)`; "子图内部" 列追加 `substitute_meta`
+- F17 完成:
+  - `src/harness_stata/nodes/hitl.py` (247 行, < 300 warn 阈值) 新增:
+    - `_INTERRUPT_TYPE = "hitl_plan_review"` 模块常量作为 F24 CLI/Web resume 的稳定契约
+    - `_SECTION_HEADERS` / `_ROLE_LABEL` 常量字典便于测试断言
+    - 7 个 `_format_*` 纯函数 (topic/sample/equation/variables_table/substitution_trace/core_hypothesis/sample_size), **全部无 I/O**, 保证 langgraph interrupt 重入语义下反复调用无副作用
+    - 样本规模预估取 min~max 区间 (基于所有非 None record_count), 避免单值误导
+    - `_validate` 三段校验: dict / approved:bool / approved=False 时 user_notes 必须非空
+    - `_request_decision` 循环: 最多 3 次 interrupt, 每次失败把 error msg 附回 payload 让调用方重填, 彻底失败抛 ValueError
+    - 主函数 `hitl(state)` 返回 approved 时 `{"hitl_decision":...}`, rejected 时附 `workflow_status:"rejected"`
+  - `tests/nodes/test_hitl.py` (246 行, 11 用例 全过):
+    - 5 条格式化纯函数用例 (full / no_substitution / all_counts / partial_counts / all_none)
+    - 6 条 hitl 节点用例 (approved_with_notes / approved_no_notes / rejected_valid / rejected_empty_notes_retries / rejected_persistent_invalid_raises / malformed_resume_raises)
+    - Mock 方案: `mocker.patch("harness_stata.nodes.hitl.interrupt", side_effect=...)` 在 import 站点打桩, 不引入 InMemorySaver + StateGraph (真实 interrupt/resume 留给 F23 集成测试)
+  - `tests/nodes/conftest.py` (195 行) 追加 3 个 factory fixture: `make_empirical_spec` / `make_model_plan` / `make_probe_report(substituted, missing_counts)`, 与 `mock_chat_model_for` 同风格, 可被 F18+ 下游节点测试复用
+  - `docs/state.md` 的 `hitl_decision` 小节追加 workflow_status 联动说明与 interrupt/Command(resume) 契约
   - 设计取舍 (用户拍板):
-    - 替代搜索路径 = B (塞回队列+独立预算): 与 docs/empirical-analysis-workflow.md:104 图示一致
-    - ModelPlan 不回写: hard 不可替代; soft 替代仅发生在控制变量, 不影响 equation/core_hypothesis; prompt 禁跨频率替代避免 data_structure_requirements 漂移
-- 质量门禁 9/9 通过 (新增 5 用例 + 修改 4 用例, 全仓 31/31 pytest 通过); pyright strict 在 `_format_trace` 的 `str(m.content)` 处用 `# pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]` 压制 BaseMessage.content 的 partial-unknown 类型
+    - 交互机制 = langgraph `interrupt()` 原语而非同步阻塞 CLI: 为 F24 Web 端留路径, 节点纯函数重入安全
+    - user_notes = approved 可选 / rejected 必填非空: 保留拒因便于后续会话追溯
+    - 空 user_notes 兜底 = 二次 interrupt 最多 3 次, 而非首次 raise: 避免用户已填合法字段在图终止时丢失
+    - 交付边界 = 只做节点 + 单测, 不打通 CLI (F24) 和主图装配 (F23)
+  - pyright strict 处理: `_validate` 中 `isinstance(raw, dict)` 后用 `cast("dict[str, Any]", raw)` 消除 reportUnknownVariableType, 整个文件零 pyright ignore
+- 质量门禁 9/9 通过 (全仓 42/42 pytest, 新增 11 用例)
 
 ## 下一步
 
-1. F17: `nodes/hitl.py` 一次性向用户呈递完整研究方案 (变量定义 + 模型方程 + 替代溯源 + 样本规模预估), CLI 交互采集 approved/rejected 决策, 写 `hitl_decision`
-2. F20: `nodes/data_cleaning.py` 借 F19 `build_react_subgraph` + 文件 IO/Python 执行工具
+1. F18: `nodes/data_download.py` 纯代码解析 `DownloadManifest` 调用 csmar-mcp 完成批量下载, 写 `DownloadedFiles`
+2. F20: `nodes/data_cleaning.py` 借 F19 `build_react_subgraph` + 文件 IO/Python 执行工具产出 `MergedDataset`
 3. `nodes/data_probe.py` 节点包装 (消费 `build_probe_subgraph`, 装入主图需要 F23)
 
 ## 未解决/卡点

@@ -166,10 +166,12 @@
 
 由 HITL 节点写入。轻量审批标记，不承担数据传递职责。
 
-| 字段       | 类型        | 说明                     |
-| ---------- | ----------- | ------------------------ |
-| approved   | bool        | 是否审核通过             |
-| user_notes | str \| None | 用户审核时的备注（可选） |
+| 字段       | 类型        | 说明                                                 |
+| ---------- | ----------- | ---------------------------------------------------- |
+| approved   | bool        | 是否审核通过                                         |
+| user_notes | str \| None | 用户审核备注（approved 时可选；rejected 时必填非空） |
+
+说明：HITL 节点依据 approved 联动写入 `workflow_status`——approved 时不写入（保持 `running`）、rejected 时写入 `"rejected"`，驱动主图 HITL 后的条件边。节点通过 langgraph `interrupt()` 原语暂停图执行，外部调用方通过 `Command(resume={approved, user_notes})` 续图；若 resume 值不合法（非 dict、缺 approved、或 approved=False 且 user_notes 为空），节点最多 3 次重新 `interrupt()` 让调用方重填，仍失败则抛 `ValueError`。
 
 #### DownloadedFiles
 
