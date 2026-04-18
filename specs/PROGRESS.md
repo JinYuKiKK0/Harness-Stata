@@ -2,7 +2,7 @@
 
 ## 当前焦点
 
-feature_list.json 设计与首版填充落地，Session 流程引入"读 feature_list → 选目标 → 自动标 passes"环节。下一步按 feature_list.json 推进 F10（需求解析节点冒烟测试）。
+F10 需求解析节点冒烟测试落地，tests/smoke/ 测试目录约定建立。下一步按 feature_list.json 推进 F11（模型与基准线构建节点）。
 
 ## 已完成
 
@@ -27,6 +27,7 @@ feature_list.json 设计与首版填充落地，Session 流程引入"读 feature
 - state.py 新增 UserRequest TypedDict + WorkflowState.user_request 字段
 - 需求解析节点 nodes/requirement_analysis.py：单轮 LLM + with_structured_output
 - 需求解析 prompt：prompts/requirement_analysis.md
+- 需求解析节点 tests/smoke/test_requirement_analysis_smoke.py：节点级端到端冒烟测试（mock LLM，校验 EmpiricalSpec 状态契约）
 - feature_list.json 宏观需求清单
   - 24 个能力级 user story，与 PROGRESS.md 正交（宏观稳态 vs 微观流水）
   - schema：id / description / steps / depends_on / passes
@@ -37,9 +38,8 @@ feature_list.json 设计与首版填充落地，Session 流程引入"读 feature
 
 ## 下一步
 
-1. F10：需求解析节点冒烟测试（硬编码 UserRequest 调用节点验证 EmpiricalSpec 结构）
-2. F11：模型与基准线构建节点（model_construction）
-3. 按 feature_list.json depends_on 逐步推进后续 feature
+1. F11：模型与基准线构建节点（model_construction）
+2. 按 feature_list.json depends_on 逐步推进后续 feature
 
 ## 未解决/卡点
 

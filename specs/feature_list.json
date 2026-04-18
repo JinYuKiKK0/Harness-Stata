@@ -116,7 +116,7 @@
         "pytest 通过"
       ],
       "depends_on": ["F09"],
-      "passes": false
+      "passes": true
     },
     {
       "id": "F11",
