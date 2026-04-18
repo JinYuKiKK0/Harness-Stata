@@ -21,7 +21,8 @@ def _make_user_request(**overrides: Any) -> UserRequest:
         "x_variable": "公司治理质量",
         "y_variable": "ROA",
         "sample_scope": "A股上市公司",
-        "time_range": {"start": "2018", "end": "2022"},
+        "time_range_start": "2018",
+        "time_range_end": "2022",
         "data_frequency": "yearly",
     }
     return {**defaults, **overrides}  # type: ignore[return-value]

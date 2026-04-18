@@ -51,11 +51,12 @@
 
 | 字段           | 类型                                            | 说明                         |
 | -------------- | ----------------------------------------------- | ---------------------------- |
-| x_variable     | str                                             | 核心解释变量描述             |
-| y_variable     | str                                             | 被解释变量描述               |
-| sample_scope   | str                                             | 样本范围 e.g. "A股上市公司"  |
-| time_range     | TimeRange                                       | 时间范围                     |
-| data_frequency | "yearly" \| "quarterly" \| "monthly" \| "daily" | 数据频率                     |
+| x_variable       | str                                             | 核心解释变量描述             |
+| y_variable       | str                                             | 被解释变量描述               |
+| sample_scope     | str                                             | 样本范围 e.g. "A股上市公司"  |
+| time_range_start | str                                             | 起始时间                     |
+| time_range_end   | str                                             | 结束时间                     |
+| data_frequency   | "yearly" \| "quarterly" \| "monthly" \| "daily" | 数据频率                     |
 
 #### 共享类型
 
@@ -68,6 +69,23 @@
 | contract_type | "hard" \| "soft"                          | Hard/Soft 标签               |
 | role          | "dependent" \| "independent" \| "control" | Y / X / 控制变量             |
 
+**VariableSource**
+
+| 字段     | 类型 | 说明       |
+| -------- | ---- | ---------- |
+| database | str  | 数据库名   |
+| table    | str  | 表名       |
+| field    | str  | 字段名     |
+
+**SubstitutionTrace**
+
+| 字段                    | 类型 | 说明             |
+| ----------------------- | ---- | ---------------- |
+| original                | str  | 原始变量名       |
+| reason                  | str  | 替代原因         |
+| substitute              | str  | 替代变量名       |
+| substitute_description  | str  | 替代变量描述     |
+
 #### EmpiricalSpec
 
 由需求解析节点写入。
@@ -77,7 +95,8 @@
 | topic                | str                                             | 研究选题                     |
 | variables            | list[VariableDefinition]                        | 变量清单（Y + X + 控制变量） |
 | sample_scope         | str                                             | 样本范围 e.g. "A股上市公司"  |
-| time_range           | {start: str, end: str}                          | 时间范围                     |
+| time_range_start     | str                                             | 起始时间                     |
+| time_range_end       | str                                             | 结束时间                     |
 | data_frequency       | "yearly" \| "quarterly" \| "monthly" \| "daily" | 数据频率                     |
 | analysis_granularity | str                                             | 分析粒度 e.g. "公司-年度"    |
 

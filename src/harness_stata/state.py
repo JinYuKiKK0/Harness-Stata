@@ -15,18 +15,14 @@ from typing import Literal, TypedDict
 # ---------------------------------------------------------------------------
 
 
-class TimeRange(TypedDict):
-    start: str
-    end: str
-
-
 class UserRequest(TypedDict):
-    """User-provided empirical analysis requirements (5 mandatory fields)."""
+    """User-provided empirical analysis requirements (6 mandatory fields)."""
 
     x_variable: str
     y_variable: str
     sample_scope: str
-    time_range: TimeRange
+    time_range_start: str
+    time_range_end: str
     data_frequency: Literal["yearly", "quarterly", "monthly", "daily"]
 
 
@@ -96,7 +92,8 @@ class EmpiricalSpec(TypedDict):
     topic: str
     variables: list[VariableDefinition]
     sample_scope: str
-    time_range: TimeRange
+    time_range_start: str
+    time_range_end: str
     data_frequency: Literal["yearly", "quarterly", "monthly", "daily"]
     analysis_granularity: str
 

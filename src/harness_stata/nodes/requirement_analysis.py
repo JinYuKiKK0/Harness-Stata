@@ -20,11 +20,6 @@ from harness_stata.state import UserRequest, WorkflowState
 # ---------------------------------------------------------------------------
 
 
-class _TimeRangeModel(BaseModel):
-    start: str = Field(description="起始年份")
-    end: str = Field(description="结束年份")
-
-
 class _VariableDefinitionModel(BaseModel):
     name: str = Field(description="变量英文缩写, e.g. ROA")
     description: str = Field(description="变量中文含义, e.g. 总资产收益率")
@@ -40,7 +35,8 @@ class _EmpiricalSpecModel(BaseModel):
     topic: str = Field(description="研究选题, 一句话概括X对Y的影响关系")
     variables: list[_VariableDefinitionModel] = Field(description="变量清单: Y + X + 控制变量")
     sample_scope: str = Field(description="样本范围, 直接取自用户输入")
-    time_range: _TimeRangeModel = Field(description="时间范围, 直接取自用户输入")
+    time_range_start: str = Field(description="起始年份, 直接取自用户输入")
+    time_range_end: str = Field(description="结束年份, 直接取自用户输入")
     data_frequency: Literal["yearly", "quarterly", "monthly", "daily"] = Field(
         description="数据频率, 直接取自用户输入"
     )
@@ -76,7 +72,6 @@ def requirement_analysis(state: WorkflowState) -> dict[str, Any]:
 
 def _format_user_message(user_req: UserRequest) -> str:
     """Format UserRequest fields into a human-readable message for the LLM."""
-    tr = user_req["time_range"]
     freq_map: dict[str, str] = {
         "yearly": "年度",
         "quarterly": "季度",
@@ -89,6 +84,6 @@ def _format_user_message(user_req: UserRequest) -> str:
         f"核心解释变量 X: {user_req['x_variable']}\n"
         f"被解释变量 Y: {user_req['y_variable']}\n"
         f"样本范围: {user_req['sample_scope']}\n"
-        f"时间范围: {tr['start']} - {tr['end']}\n"
+        f"时间范围: {user_req['time_range_start']} - {user_req['time_range_end']}\n"
         f"数据频率: {freq_label}"
     )

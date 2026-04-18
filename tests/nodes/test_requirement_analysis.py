@@ -69,7 +69,8 @@ def _make_fake_spec() -> _EmpiricalSpecModel:
             ),
         ],
         sample_scope="A股上市公司",
-        time_range={"start": "2018", "end": "2022"},
+        time_range_start="2018",
+        time_range_end="2022",
         data_frequency="yearly",
         analysis_granularity="公司-年度",
     )

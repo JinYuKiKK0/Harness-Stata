@@ -16,7 +16,7 @@
   - import-linter 5 条契约（graph/subgraphs/nodes 分层 + LLM 单一入口）
   - 错误信息已内嵌修复指引
   - pre-commit hook + 统一脚本 `scripts/check.py`
-  - 自定义 lint `scripts/lint_custom.py`：prompt 存在性、nodes 导出约定、文件大小
+  - 自定义 lint `scripts/lint_custom.py`：prompt 存在性、nodes 导出约定、文件大小、架构树一致性、状态文档一致性
 - Session 基础设施：`scripts/init.py`（跑质量门禁 + git log + 本进度文件）
 - Dev 依赖安装与质量门禁验证通过
 - LLM 选型落地：DashScope ChatTongyi（qwen-plus）,通过 langchain-community 集成

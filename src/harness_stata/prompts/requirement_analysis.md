@@ -38,6 +38,6 @@
 
 ## 输出要求
 
-- `time_range` 和 `data_frequency` 直接取自用户输入，不做修改
+- `time_range_start`、`time_range_end` 和 `data_frequency` 直接取自用户输入，不做修改
 - `sample_scope` 直接取自用户输入，不做修改
 - 所有字段必须完整填写，不得遗漏

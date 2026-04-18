@@ -24,5 +24,5 @@ def test_live_llm_returns_valid_spec(make_user_request: Callable[..., UserReques
     spec = result["empirical_spec"]
     assert "topic" in spec
     assert len(spec["variables"]) >= 3  # Y + X + at least 1 control
-    assert spec["time_range"]["start"] == "2018"
+    assert spec["time_range_start"] == "2018"
     assert spec["data_frequency"] == "yearly"
