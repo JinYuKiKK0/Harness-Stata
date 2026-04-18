@@ -1,0 +1,280 @@
+{
+  "schema": {
+    "id": "稳定字符串 ID，永不重排（保证 depends_on 引用稳定）",
+    "description": "一句话说明这个 feature 的价值",
+    "steps": "实现 + 验证步骤，最后一步必须是验证性步骤（冒烟测试 / 质量门禁通过）",
+    "depends_on": "依赖的 feature id 列表；为空数组表示可立即开工",
+    "passes": "Claude 自检 steps 全走通且 scripts/check.py 5/5 通过后改为 true"
+  },
+  "features": [
+    {
+      "id": "F01",
+      "description": "8 节点工作流拓扑、ReAct 子图骨架与 9 个 state 切片的 schema 全部定稿",
+      "steps": [
+        "工作流图与节点职责落地 docs/empirical-analysis-workflow.md",
+        "9 个 state 切片与 reducer 策略落地 docs/state.md",
+        "文档审核通过"
+      ],
+      "depends_on": [],
+      "passes": true
+    },
+    {
+      "id": "F02",
+      "description": "src/harness_stata 包结构与 pyproject.toml 完成，dev 依赖安装通过",
+      "steps": [
+        "创建 src/harness_stata 下 nodes/subgraphs/prompts/clients 包结构与 __init__.py",
+        "pyproject.toml 声明 langgraph/langchain/langchain-community/pandas/typer 与 dev 依赖",
+        "uv sync 或 pip install -e .[dev] 安装通过且可导入"
+      ],
+      "depends_on": ["F01"],
+      "passes": true
+    },
+    {
+      "id": "F03",
+      "description": "ruff/pyright/import-linter/pytest/自定义 lint 五项门禁与 pre-commit hook 全部就位",
+      "steps": [
+        "配置 ruff（11 组规则含 T20）+ pyright strict",
+        "import-linter 5 条契约（graph/subgraphs/nodes 分层 + LLM 单一入口）",
+        "scripts/lint_custom.py 5 项自定义检查（prompts/nodes 导出/文件大小/架构树/状态文档一致性）",
+        "scripts/check.py 一次性串起 5 项门禁",
+        "pre-commit hook 接入，scripts/check.py 5/5 通过"
+      ],
+      "depends_on": ["F02"],
+      "passes": true
+    },
+    {
+      "id": "F04",
+      "description": "scripts/init.py 在会话开始一站式跑门禁 + git log + 显示 PROGRESS.md",
+      "steps": [
+        "scripts/init.py 串起质量门禁 + git log + 显示 PROGRESS.md",
+        "在 CLAUDE.md 中文档化 Session 流程（开始/结束）",
+        "init.py 实跑无错"
+      ],
+      "depends_on": ["F03"],
+      "passes": true
+    },
+    {
+      "id": "F05",
+      "description": "src/harness_stata/config.py 集中暴露 DASHSCOPE_API_KEY / LLM_MODEL / LLM_TEMPERATURE 等配置",
+      "steps": [
+        "config.py 暴露配置常量与默认值",
+        "环境变量约定写入 README 或 docstring",
+        "ruff/pyright 通过"
+      ],
+      "depends_on": ["F02"],
+      "passes": true
+    },
+    {
+      "id": "F06",
+      "description": "prompts/__init__.py 提供 load_prompt(name) 加载 markdown 形式的 system prompt",
+      "steps": [
+        "实现 load_prompt(name) 从 prompts/<name>.md 加载",
+        "lint_custom 的 check_prompts 校验通过"
+      ],
+      "depends_on": ["F02"],
+      "passes": true
+    },
+    {
+      "id": "F07",
+      "description": "clients/llm.py 暴露 get_chat_model() 作为唯一 LLM SDK 入口（import-linter 强制）",
+      "steps": [
+        "通过 langchain-community 集成 ChatTongyi（qwen-plus）",
+        "暴露 get_chat_model() 返回 BaseChatModel",
+        "import-linter LLM 单一入口契约通过"
+      ],
+      "depends_on": ["F05"],
+      "passes": true
+    },
+    {
+      "id": "F08",
+      "description": "state.py 增加 UserRequest TypedDict 与 WorkflowState.user_request 字段",
+      "steps": [
+        "定义 UserRequest schema（核心解释变量 X、被解释变量 Y、样本范围、时间范围、数据频率）",
+        "接入 WorkflowState",
+        "lint_custom 的 check_state_docs 通过"
+      ],
+      "depends_on": ["F01"],
+      "passes": true
+    },
+    {
+      "id": "F09",
+      "description": "nodes/requirement_analysis.py 单轮 LLM with_structured_output 产出 EmpiricalSpec",
+      "steps": [
+        "prompts/requirement_analysis.md 撰写 system prompt",
+        "nodes/requirement_analysis.py 节点函数实现",
+        "scripts/check.py 5/5 通过"
+      ],
+      "depends_on": ["F06", "F07", "F08"],
+      "passes": true
+    },
+    {
+      "id": "F10",
+      "description": "需求解析节点端到端冒烟测试，验证 EmpiricalSpec 结构合法",
+      "steps": [
+        "tests/smoke 下硬编码 UserRequest fixture",
+        "调用 requirement_analysis 节点验证返回 EmpiricalSpec 结构",
+        "pytest 通过"
+      ],
+      "depends_on": ["F09"],
+      "passes": false
+    },
+    {
+      "id": "F11",
+      "description": "nodes/model_construction.py 基于 EmpiricalSpec 产出 ModelPlan（方程式 + 预期符号基准线）",
+      "steps": [
+        "prompts/model_construction.md 撰写 system prompt",
+        "节点 with_structured_output 实现，输出 ModelPlan",
+        "scripts/check.py 5/5 通过"
+      ],
+      "depends_on": ["F09"],
+      "passes": false
+    },
+    {
+      "id": "F12",
+      "description": "模型与基准线构建节点端到端冒烟测试，验证 ModelPlan 与符号基准线产出",
+      "steps": [
+        "tests/smoke 用 EmpiricalSpec fixture",
+        "调用 model_construction 节点验证 ModelPlan 结构",
+        "pytest 通过"
+      ],
+      "depends_on": ["F11"],
+      "passes": false
+    },
+    {
+      "id": "F13",
+      "description": "clients/csmar.py 通过 langchain-mcp-adapters 暴露 csmar-mcp 工具集",
+      "steps": [
+        "通过 MCP 协议连接 packages/csmar-mcp",
+        "暴露 get_csmar_tools() contextmanager 管理生命周期",
+        "import-linter 校验未直接 import services 层"
+      ],
+      "depends_on": ["F02"],
+      "passes": false
+    },
+    {
+      "id": "F14",
+      "description": "clients/stata.py 通过 langchain-mcp-adapters 暴露 stata-executor-mcp 工具集",
+      "steps": [
+        "通过 MCP 协议连接 packages/stata-executor",
+        "暴露 get_stata_tools() contextmanager 管理生命周期",
+        "import-linter 校验未直接 import services 层"
+      ],
+      "depends_on": ["F02"],
+      "passes": false
+    },
+    {
+      "id": "F15",
+      "description": "subgraphs/probe_subgraph.py 提供 build_probe_subgraph() 三节点骨架（dispatcher → react → handler）",
+      "steps": [
+        "variable_dispatcher / variable_react / result_handler 三节点实现",
+        "per_variable_max_calls 预算控制接入内层 ReAct",
+        "单元测试覆盖空队列与单变量场景"
+      ],
+      "depends_on": ["F11", "F13"],
+      "passes": false
+    },
+    {
+      "id": "F16",
+      "description": "数据探针 Hard/Soft 分支与替代变量回写 EmpiricalSpec/ModelPlan 的逻辑",
+      "steps": [
+        "result_handler 实现 Hard/Soft 分支路由",
+        "Soft 替代成功后回写 EmpiricalSpec 与 ModelPlan",
+        "产出 ProbeReport + DownloadManifest，单元测试覆盖三种分支"
+      ],
+      "depends_on": ["F15"],
+      "passes": false
+    },
+    {
+      "id": "F17",
+      "description": "nodes/hitl.py 一次性向用户呈递完整研究方案并采集 approved/rejected 决策",
+      "steps": [
+        "方案呈递格式（变量定义表 + 模型方程 + 预期符号 + 替代溯源 + 样本规模预估）",
+        "CLI 交互采集用户审核决策",
+        "写入 hitl_decision，conditional edge 路由通过"
+      ],
+      "depends_on": ["F16"],
+      "passes": false
+    },
+    {
+      "id": "F18",
+      "description": "nodes/data_download.py 纯代码解析 DownloadManifest 调用 csmar-mcp 完成批量下载",
+      "steps": [
+        "解析 DownloadManifest 中的下载参数",
+        "调用 csmar 工具下载到指定目录",
+        "写入 DownloadedFiles 路径清单，单元测试 mock csmar 工具验证"
+      ],
+      "depends_on": ["F13", "F17"],
+      "passes": false
+    },
+    {
+      "id": "F19",
+      "description": "subgraphs/generic_react.py 提供 build_react_subgraph(tools, prompt, max_iterations) 复用骨架",
+      "steps": [
+        "agent + tool_executor 双节点 + should_continue 条件边",
+        "max_iterations 安全兜底",
+        "单元测试覆盖正常完成与强制截断两种出口"
+      ],
+      "depends_on": ["F02"],
+      "passes": false
+    },
+    {
+      "id": "F20",
+      "description": "nodes/data_cleaning.py 借 generic_react + 文件 IO + Python 执行工具完成跨表合并产出单一长表",
+      "steps": [
+        "工具集绑定（文件读写 + Python 执行）",
+        "prompt 撰写：跨表主键对齐、宽长表转换、列名规范",
+        "post-condition 校验主键唯一性与关键字段覆盖率",
+        "输出 MergedDataset csv 路径"
+      ],
+      "depends_on": ["F18", "F19"],
+      "passes": false
+    },
+    {
+      "id": "F21",
+      "description": "nodes/descriptive_stats.py 借 generic_react + stata-executor 完成描述性统计与逻辑校验",
+      "steps": [
+        "工具集绑定（文件读写 + stata-executor）",
+        "prompt 撰写：描述性统计、缺失与极值扫描、逻辑校验",
+        "输出 DescStatsReport"
+      ],
+      "depends_on": ["F14", "F19", "F20"],
+      "passes": false
+    },
+    {
+      "id": "F22",
+      "description": "nodes/regression.py 借 generic_react + stata-executor 完成基准回归并对照预期符号基准线",
+      "steps": [
+        "工具集绑定（文件读写 + stata-executor）",
+        "按 ModelPlan 编写 do 代码执行基准回归",
+        "强制对照预期符号基准线输出符号一致性校验",
+        "输出 RegressionResult 作为终端产物"
+      ],
+      "depends_on": ["F14", "F19", "F20"],
+      "passes": false
+    },
+    {
+      "id": "F23",
+      "description": "graph.py 装配主图：8 节点串联 + 探针后 hard_failure/success + HITL 后 approved/rejected 两条条件边",
+      "steps": [
+        "StateGraph 装配 8 节点",
+        "条件边路由函数实现",
+        "子图组合接入主图",
+        "编译并验证拓扑（END 出口正确、节点可达）"
+      ],
+      "depends_on": ["F09", "F11", "F16", "F17", "F18", "F20", "F21", "F22"],
+      "passes": false
+    },
+    {
+      "id": "F24",
+      "description": "cli.py 用 typer 暴露入口接收 UserRequest 表单并跑通端到端，端到端冒烟测试通过",
+      "steps": [
+        "typer 命令定义，接收 UserRequest 输入（核心 X/Y、样本/时间/频率）",
+        "触发主图运行并落地 RegressionResult",
+        "端到端冒烟测试用 mocked LLM/MCP 跑通整条链路",
+        "pytest 通过 + scripts/check.py 5/5 通过"
+      ],
+      "depends_on": ["F23"],
+      "passes": false
+    }
+  ]
+}

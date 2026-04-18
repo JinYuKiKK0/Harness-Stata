@@ -58,13 +58,19 @@ harness-stata/
 ### 会话开始
 
 1. 运行 scripts/init.py 跑一遍质量门禁并了解项目现状。
-2. 在编写任何代码前，宣布将要处理的功能。
+2. 读取 `specs/feature_list.json`，挑选一个 `passes:false` 且 `depends_on` 全部已 `passes:true` 的 feature 作为本次会话目标。若多项可选，结合 `specs/PROGRESS.md` 当前焦点与 MVP 价值推断当前最重要者。
+3. 在编写任何代码前，宣布将要处理的 feature id 与目标。
 
 ### 会话结束
 - 完成任何文件变更后运行`.venv/Scripts/python.exe scripts/check.py`统一质量门禁。一次性跑完 pytest、ruff、pyright、import-linter、custom-lint 全部检查
-- 完成任何实质进展后更新 `PROGRESS.md`：
+- 自检本次目标 feature 的 `steps` 全部走通且 `scripts/check.py` 5/5 通过后，将该 feature 的 `passes` 改为 true（`passes` 翻转无需用户确认）
+- 完成任何实质进展后更新 `specs/PROGRESS.md`：
   1. 推进"当前焦点"和"已完成"
   2. 从"下一步"移走已做完的项
   3. 发现/解决的卡点进"未解决/卡点"
   4. 某个 section 长期空着 → 删除该 section；需要时再加回来
 - 完成一次可交付任务后，必须进行Git提交
+
+### feature 增改约定
+
+`specs/feature_list.json` 由 Claude 主导维护。实现过程中发现需求遗漏、需要拆分或合并 feature 时，由 Claude 主动提议（说明动因与建议的 id/description/steps/depends_on），用户确认后才能修改 feature 的结构性内容。已存在的 `id` 永不重排（保证 depends_on 引用稳定），新增 feature 取递增编号。`passes` 字段的翻转不属于结构性修改，无需确认。

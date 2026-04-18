@@ -2,7 +2,7 @@
 
 ## 当前焦点
 
-需求解析节点（requirement_analysis）已实现,质量门禁 5/5 通过。待冒烟测试验证端到端 LLM 调用。
+feature_list.json 设计与首版填充落地，Session 流程引入"读 feature_list → 选目标 → 自动标 passes"环节。下一步按 feature_list.json 推进 F10（需求解析节点冒烟测试）。
 
 ## 已完成
 
@@ -27,12 +27,19 @@
 - state.py 新增 UserRequest TypedDict + WorkflowState.user_request 字段
 - 需求解析节点 nodes/requirement_analysis.py：单轮 LLM + with_structured_output
 - 需求解析 prompt：prompts/requirement_analysis.md
+- feature_list.json 宏观需求清单
+  - 24 个能力级 user story，与 PROGRESS.md 正交（宏观稳态 vs 微观流水）
+  - schema：id / description / steps / depends_on / passes
+  - 挑选机制：depends_on 约束可选集 + LLM 结合 PROGRESS.md 与 MVP 价值推断
+  - passes 判定：Claude 自检 steps 全走通且 check.py 5/5 通过后自动翻转
+  - CLAUDE.md Session 流程集成：init.py → 读 feature_list.json → 选目标 → 实现 → 标 passes → 更 PROGRESS.md → commit
+  - 结构性增改（新增/拆分/合并 feature）需用户确认；passes 翻转无需确认
 
 ## 下一步
 
-1. 冒烟测试：硬编码 UserRequest 调用需求解析节点,验证 LLM 返回正确 EmpiricalSpec
-2. 实现模型与基准线构建节点（model_construction）
-3. Git commit 固化当前进展
+1. F10：需求解析节点冒烟测试（硬编码 UserRequest 调用节点验证 EmpiricalSpec 结构）
+2. F11：模型与基准线构建节点（model_construction）
+3. 按 feature_list.json depends_on 逐步推进后续 feature
 
 ## 未解决/卡点
 
