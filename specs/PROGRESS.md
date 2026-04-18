@@ -2,43 +2,43 @@
 
 ## 当前焦点
 
-F20 完成: `nodes/data_cleaning.py` 作为第二个 async 节点,借 F19 `build_react_subgraph` 驱动 ReAct 循环,绑定单一 `run_python` REPL 工具(持久 namespace 预置 `pd`/`Path`),让 LLM 完成跨表主键对齐 + 宽长转换 + snake_case 列名规范,产出单一 `merged.csv` 到 `<session_dir>/merged.csv`;节点本身负责 JSON 解析 + 分层 post-condition(主键重复 raise、覆盖率<0.8 写入新字段 `MergedDataset.warnings`)。F23 主图装配的剩余阻塞只剩 F21/F22。下一步 F21(描述性统计)或 F22(基准回归),均依赖 F20 的 `MergedDataset`,两者可并行推进。
+F22 完成: `nodes/regression.py` 作为终端产物节点,复用 F19 `build_react_subgraph` 驱动 ReAct 循环,绑定 `clients/stata.get_stata_tools()` 产出的 stata MCP 工具集(`doctor` / `run_do` / `run_inline`),让 LLM 按 `ModelPlan.model_type/equation` 自由编写并执行 do 文件,产出 `<session_dir>/regression.do` + `regression.log`;节点负责 JSON 解析 + do/log 存在性校验 + 对照 `core_hypothesis.expected_sign` 组装结构化 `SignCheck`,符号不一致不 raise 仅写入 `consistent=False` 并正常写 `workflow_status="success"`。F23 主图装配的剩余阻塞只剩 F21。
 
 ## 当前上下文
 
 <!-- 每个会话覆盖此部分。保持简洁。 -->
 
-- F20 完成:
-  - `src/harness_stata/state.py` 的 `MergedDataset` TypedDict 新增 `warnings: list[str]` 字段;`docs/state.md` 同步补小节说明(主键重复属硬错误 raise 不入 warnings;覆盖率不足/列缺失入 warnings)
-  - `src/harness_stata/prompts/data_cleaning.md` 撰写完整 system prompt(角色 + 任务 + 可用工具 + 工作流程建议 + 终止契约);终止契约要求 LLM 最后一条消息不再发起 tool_call,content 直接输出 JSON `{"file_path": ..., "primary_key": [...]}`
-  - `src/harness_stata/nodes/data_cleaning.py` (252 行, <300 warn 阈值):
-    - 模块常量:`_MAX_ITERATIONS = 30` / `_MERGED_FILENAME = "merged.csv"` / `_COVERAGE_THRESHOLD = 0.8` / `_FENCE_RE`(剥离 markdown 围栏的正则)
-    - `_make_python_tool()`: 闭包工厂,每次调用产生新的持久 namespace dict(预置 `pd` + `Path`),@tool 装饰的 `run_python(code)` 用 `exec(code, namespace)` + `redirect_stdout` 执行并捕获 stdout/异常消息,无沙箱(MVP 本地单机)
-    - `_validate` / `_derive_output_path`(从 `DownloadedFile.path` 的 parents[1] 推导,不新增 config) / `_build_human_prompt`(拼装 EmpiricalSpec + 源文件清单 + 输出路径给 HumanMessage)
-    - `_extract_final_json` / `_extract_primary_key`: 解析 AIMessage.content 的 JSON(支持 markdown 围栏)
-    - `_check_post_conditions`: pandas 读 csv 后,先查 primary_key 列存在性与唯一性(raise),再逐变量做 `_find_variable_column` 归一化匹配(lower + 去下划线)+ 非空率覆盖(<0.8 入 warnings;列缺失入 warnings)
-    - 主函数 `async def data_cleaning(state) -> dict[str, Any]`: 验证 → 构造工具+子图 → `await subgraph.ainvoke` → 检查 messages 非空 + 最后 AIMessage + tool_calls 为空(非空 raise max_iterations) → 解析 JSON → post-condition → 写 `merged_dataset`
-  - `tests/nodes/test_data_cleaning.py` (6 用例全过):
-    - 3 条 success (single_table / multi_source_files / coverage_and_missing_column_warn 分层软告警)
-    - 3 条 failure (duplicate_primary_key_raises / react_truncation_raises / missing_downloaded_files_raises)
-    - Mock 方案:patch `harness_stata.nodes.data_cleaning.build_react_subgraph` 返回一个 MagicMock,其 `.ainvoke` 是 AsyncMock 返回 `{"messages": [AIMessage(...)], "iteration_count": 1}`;测试内预先用 pandas 在 `tmp_path` 下按 F18 session 布局(`downloads/session1/<db_table>/`)创建源 csv + 预期输出 `merged.csv`,让 `_derive_output_path` 与 post-condition 能跑
-    - async 测试统一 `asyncio.run(data_cleaning(state))` 包同步,延续 F18 约定
+- F22 完成:
+  - `src/harness_stata/prompts/regression.md` 撰写完整 system prompt(角色 + 任务上下文 + 可用工具 + 工作流程建议 + 终止契约);终止契约要求 LLM 最后一条消息不再发起 tool_call,content 直接输出 JSON `{"do_file_path", "log_file_path", "actual_sign", "summary"}`,actual_sign 严格取 `+` / `-` / `0` 三者之一
+  - `src/harness_stata/nodes/regression.py` (226 行, <300 warn 阈值):
+    - 模块常量:`_MAX_ITERATIONS = 20` / `_DO_FILENAME = "regression.do"` / `_LOG_FILENAME = "regression.log"` / `_VALID_ACTUAL_SIGNS = {"+", "-", "0"}` / `_FENCE_RE`(复用 F20 markdown 围栏剥离正则)
+    - `_validate` 校验三个必备 state 切片(merged_dataset / model_plan / empirical_spec)
+    - `_derive_session_dir(merged_path)`: `Path(merged_path).resolve().parent` 复用 F20 session_dir 约定,零新增 config
+    - `_build_human_prompt`: 拼接研究上下文 + 模型方程 + 核心假设(`variable_name` + `expected_sign` + `rationale`)+ merged 元信息(file_path/row_count/columns/warnings)+ 输出 do/log 绝对路径
+    - `_extract_final_json` / `_require_str` / `_validate_payload`: 解析并严格校验 4 个字段,actual_sign 不在集合内直接 raise
+    - `_assert_file_exists`: do 或 log 文件不存在即 raise(LLM 声称但未落盘)
+    - `_compute_sign_check`: `consistent = (expected == "ambiguous") or (expected == actual_sign)`
+    - 主函数 `async def regression(state) -> dict[str, Any]`: 验证 → `async with get_stata_tools() as tools` → 构造子图 → `await subgraph.ainvoke` → 终止校验(messages 非空 + AIMessage + tool_calls 为空) → 解析 JSON → 校验字段 → 校验 do/log 存在 → 组装 `RegressionResult` + `workflow_status="success"`
+  - `tests/nodes/test_regression.py` (7 用例全过):
+    - 3 条 success (sign_consistent / sign_inconsistent_does_not_raise / sign_ambiguous_always_consistent)
+    - 4 条 failure (react_truncation / invalid_actual_sign / log_file_missing / missing_merged_dataset)
+    - Mock 方案:patch `harness_stata.nodes.regression.build_react_subgraph` 返回 MagicMock 的 `.ainvoke` AsyncMock + 同时 patch `get_stata_tools` 为返回 `@asynccontextmanager` 产出空 list(子图被 mock 掉,工具不会被真调);测试在 `tmp_path` 下预写 `merged.csv` + `regression.do` + `regression.log` 让 `_derive_session_dir` 推导的路径校验通过
+    - async 测试统一 `asyncio.run(regression(state))` 包同步,延续 F18/F20 约定
   - 设计取舍 (plan 拍板):
-    - **D1 Python 工具形态**:单一 `run_python` REPL 工具(vs 声明式 read_csv/merge/write_csv 工具集 / 混合方案);优先 prompt 最短 + LLM 最灵活
-    - **D2 工具代码位置**:`@tool` 装饰器就地写在 `nodes/data_cleaning.py` 内(vs 新建 tools/ 包);控制文件 ≤300 行
-    - **D3 失败分层**:主键重复/缺列/ReAct 截断/LLM 未落盘 → `RuntimeError`;变量覆盖率<0.8/变量列缺失 → 写入 `MergedDataset.warnings`,下游 F21/F22 决策是否继续
-    - **D4 输出落盘**:从 `DownloadedFile.path` 推导 `parents[1] / "merged.csv"` 落在 F18 session 目录根部,不新增 config
-    - **D5 max_iterations = 30**:F15 per_variable_max_calls=8,F20 跨表更复杂,初值 30
-  - pyright strict 处理:`@tool` 装饰器被识别为 partial-unknown → 行级 `# pyright: ignore[reportUntypedFunctionDecorator, reportUnknownVariableType, reportUnknownArgumentType]`;pandas `pd.read_csv` / `.duplicated().sum()` / `.notna().sum()` 同样 pyright ignore + `cast("Any", ...)` 包一层再 `int(...)`;`AIMessage.content` 类型是 `str | list[str|dict[Unknown,Unknown]]`,用 `cast("Any", last.content)` + isinstance 收敛
-- 质量门禁 9/9 通过 (全仓 61/61 pytest, 新增 6 用例)
-- 先前 F25 / F18 完成内容见 git log d11faa1 / b7c300b
+    - **D1 do-file 生成**:LLM 自由生成(vs 节点硬编码模板);prompt 内要求 LLM 用 `file write` / `run_inline` 落盘 do 再 `run_do` 执行
+    - **D2 符号不一致分层**:不 raise,只写 `sign_check.consistent=False`;符号不一致本身是有价值的实证结论,不应视为错误
+    - **D3 产物位置**:复用 F20 session_dir(从 `merged_dataset.file_path` 的 parent 推导),`<session_dir>/regression.do` + `regression.log`,零 config 新增
+    - **D4 actual_sign 三值**:`+` / `-` / `0` 三选一(0 表示系数约等于 0 或不显著);节点严格校验
+    - **D5 max_iterations = 20**:F20=30 做跨表合并更复杂,回归只做一次建模 + 可能几次 doctor/run_inline 试错,20 够用
+  - pyright strict 处理:复用 F20 模式对 `subgraph.ainvoke` 加 `# pyright: ignore[reportUnknownMemberType]`,对 `AIMessage.content` 用 `cast("Any", ...)` + isinstance 收敛;WorkflowState 切片访问统一 `# pyright: ignore[reportTypedDictNotRequiredAccess]`
+- 质量门禁 9/9 通过 (全仓 68/68 pytest, 新增 7 用例)
+- 先前 F20 / F25 / F18 完成内容见 git log 857d865 / d11faa1 / b7c300b
 
 ## 下一步
 
-1. F21: 描述性统计节点 (借 F19 generic_react + stata-executor,读 F20 产出的 MergedDataset)
-2. F22: 基准回归节点 (借 F19 generic_react + stata-executor,对照 ModelPlan.core_hypothesis.expected_sign 做符号校验)
-3. F23: 主图装配 (等 F21 / F22 就绪, F25 已完成; 需绑定 checkpointer 以支持 F17 interrupt)
-4. F24: CLI 入口 (等 F23 就绪, 需用 asyncio.run + graph.ainvoke 适配 F18/F20 引入的 async 模式, 并处理 HITL interrupt resume)
+1. F21: 描述性统计节点 (借 F19 generic_react + stata-executor,读 F20 产出的 MergedDataset;可直接复刻 F22 的 stata 工具绑定与 ReAct 骨架,是 F22 的"简化版"终止契约——无符号校验,只返 do/log/summary)
+2. F23: 主图装配 (等 F21 就绪;F22 + F25 已完成; 需绑定 checkpointer 以支持 F17 interrupt)
+3. F24: CLI 入口 (等 F23 就绪, 需用 asyncio.run + graph.ainvoke 适配 F18/F20/F22 引入的 async 模式, 并处理 HITL interrupt resume)
 
 ## 未解决/卡点
 
@@ -51,6 +51,8 @@ F20 完成: `nodes/data_cleaning.py` 作为第二个 async 节点,借 F19 `build
 - 主 `.venv` 缺 `prettytable` (csmarapi 的运行时依赖): `scripts/check.py` 已 9/9 通过, 但若要手动跑 csmar-mcp 子包单元测试会 ImportError; 修复方案待定
 - `packages/stata-executor/` 的 ruff/pyright 收口尚未做 (类比 csmar-mcp 已完成的技术债), 留给独立会话
 - `subgraphs/probe_subgraph.py` 当前 487 行触发 check_file_size warn (>300, <500 fail). 下一次本文件实质性扩展前应拆出 `_probe_helpers.py`
-- F18 + F20 引入的 async 节点模式需在 F24 CLI 统一入口用 `asyncio.run(graph.ainvoke(...))`,并在 F21 / F22 两个节点保持一致的 async def 签名
+- F18 + F20 + F22 引入的 async 节点模式需在 F24 CLI 统一入口用 `asyncio.run(graph.ainvoke(...))`,并在 F21 节点保持一致的 async def 签名
 - F20 `run_python` 工具当前直接用 `exec` + 闭包 namespace,无沙箱/子进程隔离(MVP 本地单机可接受);若将来走服务端需替换为子进程或 Docker,但不在当前范围
 - F20 `_COVERAGE_THRESHOLD = 0.8` 当前硬编码,若需按场景调整后续再提到 config
+- F22 的 `actual_sign` 由 LLM 自己从 log 中抽取核心系数正负填回,节点不独立 parse log;MVP 信任 LLM,未来若发现 LLM 误读可改为节点端正则抽取 Stata 回归表格
+- F22 要求 do 文件内部用 `log using` 显式指定绝对路径;如果 LLM 忘写 `log using`,节点在 `_assert_file_exists(log_file_path)` 阶段 raise——prompt 已强制约束此点
