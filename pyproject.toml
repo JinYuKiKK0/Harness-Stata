@@ -1,0 +1,130 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "harness-stata"
+version = "0.1.0"
+description = "Web-orchestrated Stata empirical analysis agent on LangGraph."
+requires-python = ">=3.12"
+dependencies = [
+    "langgraph>=0.2.0",
+    "langchain>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "langchain-mcp-adapters>=0.1.0",
+    "pandas>=2.2.0",
+    "pydantic>=2.8.0",
+    "typer>=0.12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pyright>=1.1.380",
+    "ruff>=0.6.0",
+    "pre-commit>=3.8.0",
+    "import-linter>=2.0",
+]
+
+[project.scripts]
+harness-stata = "harness_stata.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harness_stata"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+    "N",   # pep8-naming
+    "C4",  # flake8-comprehensions
+    "TID", # flake8-tidy-imports
+    "T20", # flake8-print（禁止裸 print，强制走 logging）
+    "RUF", # ruff-specific
+]
+ignore = [
+    "E501", # 行长由 formatter 处理
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pyright]
+include = ["src/harness_stata", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = "warning"
+venvPath = "."
+venv = ".venv"
+
+[tool.importlinter]
+root_packages = ["harness_stata"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = """[graph→subgraphs] graph.py 不得直接 import harness_stata.subgraphs——主图不感知子图存在。
+Fix: 在 nodes/<concrete>.py 内通过 subgraphs/ 工厂组装子图，把编译产物暴露为节点函数；graph.py 只 import nodes 中的节点。详见 docs/empirical-analysis-workflow.md "ReAct 子图设计"。"""
+type = "forbidden"
+source_modules = ["harness_stata.graph"]
+forbidden_modules = ["harness_stata.subgraphs"]
+
+[[tool.importlinter.contracts]]
+name = """[subgraphs→nodes] subgraphs/ 不得 import harness_stata.nodes——子图工厂需要保持复用性，不耦合特定节点。
+Fix: 子图工厂只接收抽象参数（tools、prompt、predicates 等），不引用具体节点；调用方在 nodes/ 中传入业务数据。"""
+type = "forbidden"
+source_modules = ["harness_stata.subgraphs"]
+forbidden_modules = ["harness_stata.nodes"]
+
+[[tool.importlinter.contracts]]
+name = """[nodes/subgraphs→packages] nodes/ 与 subgraphs/ 不得直连 csmar_mcp / stata_executor / csmarapi——必须经 MCP 协议而非绕过 client 层。
+Fix: 通过 clients/csmar.py 或 clients/stata.py 提供的 contextmanager 获取 LangChain tools，再绑定给节点或 ReAct agent。详见 CLAUDE.md "项目组织架构"。"""
+type = "forbidden"
+source_modules = [
+    "harness_stata.nodes",
+    "harness_stata.subgraphs",
+]
+forbidden_modules = [
+    "csmar_mcp",
+    "stata_executor",
+    "csmarapi",
+]
+
+[[tool.importlinter.contracts]]
+name = """[llm-single-entry] 仅 clients/llm.py 可以 import langchain_openai / openai——LLM 客户端必须经 clients/llm.py 统一封装。
+Fix: 改为 from harness_stata.clients.llm import <factory>，复用统一的 LLM 客户端构造方式。如果当前 clients/llm.py 没有覆盖你的需求，应当扩展 llm.py 而不是绕过。"""
+type = "forbidden"
+source_modules = ["harness_stata"]
+forbidden_modules = [
+    "langchain_openai",
+    "openai",
+]
+ignore_imports = [
+    "harness_stata.clients.llm -> langchain_openai",
+    "harness_stata.clients.llm -> openai",
+]
+
+[[tool.importlinter.contracts]]
+name = """[layers] 分层依赖方向（高 → 低）：cli > graph > nodes > subgraphs > clients。低层不得反向 import 高层。
+Fix: 检查违规导入，把共享类型/工具下沉到 state.py / config.py / prompts/（不在分层中），或抽象为独立基础模块。"""
+type = "layers"
+layers = [
+    "harness_stata.cli",
+    "harness_stata.graph",
+    "harness_stata.nodes",
+    "harness_stata.subgraphs",
+    "harness_stata.clients",
+]
