@@ -14,6 +14,8 @@ from harness_stata.state import UserRequest
 def _safe_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set dummy env vars so accidental real-service calls don't crash the runner."""
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dummy-key-not-real")
+    monkeypatch.setenv("CSMAR_ACCOUNT", "test-dummy-account")
+    monkeypatch.setenv("CSMAR_PASSWORD", "test-dummy-password")
 
 
 def _make_user_request(**overrides: Any) -> UserRequest:

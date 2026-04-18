@@ -2,24 +2,24 @@
 
 ## 当前焦点
 
-F12 模型构建节点冒烟测试落地。下一步按 feature_list.json 推进 F13/F14 双 MCP 客户端（解锁 F15 数据探针与 F18 下载链路）。
+F13 CSMAR MCP 客户端落地。下一步按 feature_list.json 推进 F14 stata-executor 客户端，随后解锁 F15（probe 子图）与 F18（数据下载节点）。
 
 ## 当前上下文
 
 <!-- 每个会话覆盖此部分。保持简洁。 -->
 
-- 本会话交付 F12：新增 `tests/smoke/test_model_construction_smoke.py`，镜像 F10 结构，内联 realistic `EmpiricalSpec` 与 `_ModelPlanModel` fixture，mock `get_chat_model` 后验证 `model_plan` 状态契约（顶层 4 键 + `core_hypothesis` 三子键 + `expected_sign` 枚举）
-- realistic spec 未抽出到根 conftest，当前仅 smoke 层消费，避免过早抽象
+- 本会话交付 F13：`src/harness_stata/clients/csmar.py` 新增异步 contextmanager `get_csmar_tools()`，通过 `langchain-mcp-adapters` 的 `MultiServerMCPClient` 以 stdio 子进程方式拉起 `packages/csmar-mcp`，用 `sys.executable -m csmar_mcp` 避免跨平台解释器漂移
+- `config.py` 的 `Settings` 扩展 `csmar_account` / `csmar_password` 字段并从 `CSMAR_ACCOUNT` / `CSMAR_PASSWORD` 环境变量读取，缺失时抛 `RuntimeError`
+- `tests/conftest.py` 的 dummy env fixture 追加两个 CSMAR 变量，F09–F12 测试链路无回归
 - 质量门禁 6/6 通过（14 tests）
 
 ## 下一步
 
-1. F13：`clients/csmar.py` 通过 langchain-mcp-adapters 暴露 csmar-mcp 工具集
-2. F14：`clients/stata.py` 通过 langchain-mcp-adapters 暴露 stata-executor-mcp 工具集
-3. F13/F14 双客户端就绪后可推进 F15（probe_subgraph 骨架）与 F19（generic_react 工厂）
+1. F14：`clients/stata.py` 通过 langchain-mcp-adapters 暴露 stata-executor-mcp 工具集（镜像 F13 结构）
+2. F13/F14 双客户端就绪后可推进 F15（probe_subgraph 骨架）与 F19（generic_react 工厂）
 
 ## 未解决/卡点
 
-- pyright strict 下 ChatTongyi 缺少部分类型桩,clients/llm.py 中有 type: ignore 注释
+- pyright strict 下 ChatTongyi 缺少部分类型桩，clients/llm.py 中有 type: ignore 注释
 - WorkflowState total=False 导致所有 state key 访问需要 type: ignore[reportTypedDictNotRequiredAccess]
-- ruff RUF001 对希腊字母的同形歧义检查：Field description 中避免使用 α/β/γ 等希腊字母，具体符号样式由 system prompt 承担
+- ruff RUF001/RUF002 对中文全角标点与同形希腊字母的检查：docstring 与 Field description 中避免使用全角标点（，。（）等）与 α/β/γ；F13 clients/csmar.py docstring 已改写为英文
