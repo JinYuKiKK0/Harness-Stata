@@ -4,37 +4,17 @@
 
 F10 需求解析节点冒烟测试落地，tests/smoke/ 测试目录约定建立。下一步按 feature_list.json 推进 F11（模型与基准线构建节点）。
 
-## 已完成
+## 当前上下文
 
-- 顶层设计
-  - 工作流与节点编排：docs/empirical-analysis-workflow.md（8 节点 + 主图拓扑 + ReAct 子图设计）
-  - State schema 设计：docs/state.md（9 个切片 + reducer 策略 + 子图隔离）
-- 项目骨架：src/harness_stata/ 下全部空文件与 `__init__.py`
-- 技术栈与依赖声明：pyproject.toml（langgraph / langchain / langchain-community / pandas / typer + dev tools）
-- 机械化质量门禁
-  - ruff（11 组规则含 T20 禁裸 print）、pyright strict
-  - import-linter 5 条契约（graph/subgraphs/nodes 分层 + LLM 单一入口）
-  - 错误信息已内嵌修复指引
-  - pre-commit hook + 统一脚本 `scripts/check.py`
-  - 自定义 lint `scripts/lint_custom.py`：prompt 存在性、nodes 导出约定、文件大小、架构树一致性、状态文档一致性
-- Session 基础设施：`scripts/init.py`（跑质量门禁 + git log + 本进度文件）
-- Dev 依赖安装与质量门禁验证通过
-- LLM 选型落地：DashScope ChatTongyi（qwen-plus）,通过 langchain-community 集成
-- 基础设施层实现
-  - config.py：集中配置,环境变量 DASHSCOPE_API_KEY / LLM_MODEL / LLM_TEMPERATURE
-  - prompts/__init__.py：load_prompt() 加载 markdown prompt
-  - clients/llm.py：get_chat_model() 返回 BaseChatModel（唯一 LLM SDK 入口）
-- state.py 新增 UserRequest TypedDict + WorkflowState.user_request 字段
-- 需求解析节点 nodes/requirement_analysis.py：单轮 LLM + with_structured_output
-- 需求解析 prompt：prompts/requirement_analysis.md
-- 需求解析节点 tests/smoke/test_requirement_analysis_smoke.py：节点级端到端冒烟测试（mock LLM，校验 EmpiricalSpec 状态契约）
-- feature_list.json 宏观需求清单
-  - 24 个能力级 user story，与 PROGRESS.md 正交（宏观稳态 vs 微观流水）
-  - schema：id / description / steps / depends_on / passes
-  - 挑选机制：depends_on 约束可选集 + LLM 结合 PROGRESS.md 与 MVP 价值推断
-  - passes 判定：Claude 自检 steps 全走通且 check.py 5/5 通过后自动翻转
-  - CLAUDE.md Session 流程集成：init.py → 读 feature_list.json → 选目标 → 实现 → 标 passes → 更 PROGRESS.md → commit
-  - 结构性增改（新增/拆分/合并 feature）需用户确认；passes 翻转无需确认
+<!-- 每个会话覆盖此部分。保持简洁。 -->
+
+- 本会话交付 F10：`tests/smoke/test_requirement_analysis_smoke.py` 以 mock LLM 校验 `requirement_analysis` 节点的 `empirical_spec` 状态契约（字段齐备 + 变量角色覆盖）
+- 测试目录分工确立（F12 起复用此约定）：
+  - `tests/nodes/` — 单元测试，允许 mock 交互断言与内部细节
+  - `tests/smoke/` — 节点级端到端契约，mock LLM/MCP，跑在默认 pytest（`scripts/check.py`）内
+  - `tests/integration/` — 真实服务，`@pytest.mark.integration` 默认跳过
+- 已完工基础设施（稳态，可直接复用）：config.py、prompts/load_prompt、clients/llm.get_chat_model（ChatTongyi / qwen-plus）、state.py (UserRequest + EmpiricalSpec 等 9 切片)、nodes/requirement_analysis
+- 质量门禁 6/6 通过（pytest / ruff lint / ruff format / pyright strict / import-linter 5 契约 / custom lint 5 检查）
 
 ## 下一步
 
