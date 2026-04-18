@@ -64,6 +64,10 @@ ignore = [
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "parents"
 
+[tool.ruff.lint.flake8-bugbear]
+# typer 惯用在默认值位置调用 Option/Argument 以声明参数元数据。
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"

@@ -27,6 +27,7 @@ harness-stata/
 │   ├── graph.py                  # 主图装配（仅 import nodes/）
 │   ├── config.py                 # 配置
 │   ├── cli.py                    # typer CLI 入口
+│   ├── __main__.py               # python -m harness_stata 入口
 │   ├── nodes/                    # 主图视角下的 8 个节点
 │   │   ├── requirement_analysis.py
 │   │   ├── model_construction.py
@@ -58,12 +59,12 @@ harness-stata/
 
 ### 会话开始
 
-1. 运行 scripts/init.py 跑一遍质量门禁并了解项目现状。
+1. 运行 scripts/init.py 跑一遍质量门禁并了解项目现状**调用时不加任何 `| tail` 或 `| head` 截断，直接读取完整输出**。
 2. 读取 `specs/PROGRESS.md`和`specs/feature_list.json`，挑选一个 `passes:false` 且 `depends_on` 全部已 `passes:true` 的 feature 作为本次会话目标。若多项可选，结合 `specs/PROGRESS.md` 当前焦点与 MVP 价值推断当前最重要者。
 3. 在编写任何代码前，宣布将要处理的 feature id 与目标。
 
 ### 会话结束
-- 完成任何文件变更后运行`.venv/Scripts/python.exe scripts/check.py`统一质量门禁。一次性跑完 pytest、ruff、pyright、import-linter、custom-lint 全部检查
+- 完成任何文件变更后运行`.venv/Scripts/python.exe scripts/check.py`统一质量门禁。一次性跑完 pytest、ruff、pyright、import-linter、custom-lint 全部检查。**调用时不加任何 `| tail` 或 `| head` 截断，直接读取完整输出**
 - 自检本次目标 feature 的 `steps` 全部走通且 `scripts/check.py` 5/5 通过后，将该 feature 的 `passes` 改为 true（`passes` 翻转无需用户确认）
 - 完成任何实质进展后更新 `specs/PROGRESS.md`：
   1. 推进"当前焦点"和"当前上下文"
