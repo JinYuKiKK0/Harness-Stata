@@ -238,7 +238,7 @@
         "输出 DescStatsReport"
       ],
       "depends_on": ["F14", "F19", "F20"],
-      "passes": false
+      "passes": true
     },
     {
       "id": "F22",
