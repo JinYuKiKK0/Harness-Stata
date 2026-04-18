@@ -1,9 +1,20 @@
-"""Centralized configuration loaded from environment variables."""
+"""Centralized configuration loaded from the project-root .env file.
+
+All runtime settings are read exclusively from ``<repo>/.env`` via
+``dotenv_values``; the process environment is intentionally NOT consulted,
+to keep ``.env`` as the single source of truth and avoid configuration
+drift between machines.
+"""
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import dotenv_values
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ENV_PATH = PROJECT_ROOT / ".env"
 
 
 @dataclass(frozen=True)
@@ -13,30 +24,43 @@ class Settings:
     llm_temperature: float
     csmar_account: str
     csmar_password: str
+    stata_executable: str
+    stata_edition: str
+
+
+def _load_env() -> dict[str, str]:
+    raw = dotenv_values(ENV_PATH)
+    return {k: v for k, v in raw.items() if v is not None}
 
 
 def get_settings() -> Settings:
-    api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+    env = _load_env()
+
+    api_key = env.get("DASHSCOPE_API_KEY", "")
     if not api_key:
-        msg = (
-            "环境变量 DASHSCOPE_API_KEY 未设置。"
-            " 请在 .env 文件或系统环境变量中配置 DashScope API Key。"
-        )
+        msg = "DASHSCOPE_API_KEY 未配置。请在项目根 .env 中设置 DashScope API Key。"
         raise RuntimeError(msg)
 
-    csmar_account = os.environ.get("CSMAR_ACCOUNT", "")
-    csmar_password = os.environ.get("CSMAR_PASSWORD", "")
+    csmar_account = env.get("CSMAR_ACCOUNT", "")
+    csmar_password = env.get("CSMAR_PASSWORD", "")
     if not csmar_account or not csmar_password:
+        msg = "CSMAR_ACCOUNT / CSMAR_PASSWORD 未配置。请在项目根 .env 中设置 CSMAR 账户凭据。"
+        raise RuntimeError(msg)
+
+    stata_executable = env.get("STATA_EXECUTOR_STATA_EXECUTABLE", "")
+    if not stata_executable:
         msg = (
-            "环境变量 CSMAR_ACCOUNT / CSMAR_PASSWORD 未设置。"
-            " 请在 .env 文件或系统环境变量中配置 CSMAR 账户凭据。"
+            "STATA_EXECUTOR_STATA_EXECUTABLE 未配置。"
+            " 请在项目根 .env 中设置 Stata 可执行文件的绝对路径。"
         )
         raise RuntimeError(msg)
 
     return Settings(
         dashscope_api_key=api_key,
-        llm_model_name=os.environ.get("LLM_MODEL", "qwen-plus"),
-        llm_temperature=float(os.environ.get("LLM_TEMPERATURE", "0.0")),
+        llm_model_name=env.get("LLM_MODEL", "qwen-plus"),
+        llm_temperature=float(env.get("LLM_TEMPERATURE", "0.0")),
         csmar_account=csmar_account,
         csmar_password=csmar_password,
+        stata_executable=stata_executable,
+        stata_edition=env.get("STATA_EXECUTOR_EDITION", "mp"),
     )

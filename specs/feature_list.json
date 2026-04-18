@@ -160,7 +160,7 @@
         "import-linter 校验未直接 import services 层"
       ],
       "depends_on": ["F02"],
-      "passes": false
+      "passes": true
     },
     {
       "id": "F15",

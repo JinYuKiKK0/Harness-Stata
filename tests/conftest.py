@@ -10,12 +10,22 @@ import pytest
 from harness_stata.state import UserRequest
 
 
+_DUMMY_ENV: dict[str, str] = {
+    "DASHSCOPE_API_KEY": "test-dummy-key-not-real",
+    "CSMAR_ACCOUNT": "test-dummy-account",
+    "CSMAR_PASSWORD": "test-dummy-password",
+    "STATA_EXECUTOR_STATA_EXECUTABLE": "/nonexistent/stata-dummy",
+    "STATA_EXECUTOR_EDITION": "mp",
+}
+
+
 @pytest.fixture(autouse=True)
 def _safe_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Set dummy env vars so accidental real-service calls don't crash the runner."""
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dummy-key-not-real")
-    monkeypatch.setenv("CSMAR_ACCOUNT", "test-dummy-account")
-    monkeypatch.setenv("CSMAR_PASSWORD", "test-dummy-password")
+    """Patch config._load_env so tests never touch the real .env or system env."""
+    monkeypatch.setattr(
+        "harness_stata.config._load_env",
+        lambda: dict(_DUMMY_ENV),
+    )
 
 
 def _make_user_request(**overrides: Any) -> UserRequest:
