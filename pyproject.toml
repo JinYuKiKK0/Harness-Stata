@@ -98,6 +98,7 @@ Fix: 在 nodes/<concrete>.py 内通过 subgraphs/ 工厂组装子图，把编译
 type = "forbidden"
 source_modules = ["harness_stata.graph"]
 forbidden_modules = ["harness_stata.subgraphs"]
+allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = """[subgraphs→nodes] subgraphs/ 不得 import harness_stata.nodes——子图工厂需要保持复用性，不耦合特定节点。
