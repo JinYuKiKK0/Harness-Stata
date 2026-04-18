@@ -2,22 +2,21 @@
 
 ## 当前焦点
 
-F11 模型与基准线构建节点落地。下一步按 feature_list.json 推进 F12（模型构建节点端到端冒烟测试）。
+F12 模型构建节点冒烟测试落地。下一步按 feature_list.json 推进 F13/F14 双 MCP 客户端（解锁 F15 数据探针与 F18 下载链路）。
 
 ## 当前上下文
 
 <!-- 每个会话覆盖此部分。保持简洁。 -->
 
-- 本会话交付 F11：`nodes/model_construction.py` 单轮 LLM `with_structured_output` 产出 `ModelPlan`（`model_type` / `equation` / `core_hypothesis` / `data_structure_requirements`）
-- `prompts/model_construction.md` 采用「枚举 5 类模型 + 选择规则，不做运行时白名单」的折中契约；`core_hypothesis.variable_name` 引用完整性仅靠 prompt 强约束
-- `tests/nodes/conftest.py` 扩展 `mock_chat_model_for(node_module)` 工厂 fixture，原 `mock_chat_model` 保留给 F09 测试
-- `tests/nodes/test_model_construction.py` 覆盖 `_format_empirical_spec` 纯函数与节点契约（7 个用例）
-- 质量门禁 6/6 通过
+- 本会话交付 F12：新增 `tests/smoke/test_model_construction_smoke.py`，镜像 F10 结构，内联 realistic `EmpiricalSpec` 与 `_ModelPlanModel` fixture，mock `get_chat_model` 后验证 `model_plan` 状态契约（顶层 4 键 + `core_hypothesis` 三子键 + `expected_sign` 枚举）
+- realistic spec 未抽出到根 conftest，当前仅 smoke 层消费，避免过早抽象
+- 质量门禁 6/6 通过（14 tests）
 
 ## 下一步
 
-1. F12：模型构建节点端到端冒烟测试（`tests/smoke/test_model_construction_smoke.py`）
-2. 按 feature_list.json depends_on 逐步推进后续 feature（F13/F14 clients 双客户端优先，解锁 F15/F18 数据侧链路）
+1. F13：`clients/csmar.py` 通过 langchain-mcp-adapters 暴露 csmar-mcp 工具集
+2. F14：`clients/stata.py` 通过 langchain-mcp-adapters 暴露 stata-executor-mcp 工具集
+3. F13/F14 双客户端就绪后可推进 F15（probe_subgraph 骨架）与 F19（generic_react 工厂）
 
 ## 未解决/卡点
 

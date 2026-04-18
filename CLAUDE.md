@@ -66,7 +66,7 @@ harness-stata/
 - 完成任何文件变更后运行`.venv/Scripts/python.exe scripts/check.py`统一质量门禁。一次性跑完 pytest、ruff、pyright、import-linter、custom-lint 全部检查
 - 自检本次目标 feature 的 `steps` 全部走通且 `scripts/check.py` 5/5 通过后，将该 feature 的 `passes` 改为 true（`passes` 翻转无需用户确认）
 - 完成任何实质进展后更新 `specs/PROGRESS.md`：
-  1. 推进"当前焦点"和"已完成"
+  1. 推进"当前焦点"和"当前上下文"
   2. 从"下一步"移走已做完的项
   3. 发现/解决的卡点进"未解决/卡点"
   4. 某个 section 长期空着 → 删除该 section；需要时再加回来
