@@ -127,7 +127,7 @@
         "scripts/check.py 5/5 通过"
       ],
       "depends_on": ["F09"],
-      "passes": false
+      "passes": true
     },
     {
       "id": "F12",
