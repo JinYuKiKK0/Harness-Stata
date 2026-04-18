@@ -27,6 +27,7 @@ class Check:
 
 
 CHECKS: list[Check] = [
+    Check("pytest", [sys.executable, "-m", "pytest", "-x", "--tb=short", "-m", "not integration"]),
     Check("ruff lint", ["ruff", "check", *PATHS]),
     Check("ruff format", ["ruff", "format", "--check", *PATHS]),
     Check("pyright", ["pyright"]),

@@ -22,6 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
+    "pytest-mock>=3.14.0",
     "pyright>=1.1.380",
     "ruff>=0.6.0",
     "pre-commit>=3.8.0",
@@ -66,12 +67,24 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.pyright]
-include = ["src/harness_stata", "tests"]
+include = ["src/harness_stata"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = "warning"
 venvPath = "."
 venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "integration: calls real external services (LLM, MCP); skipped by default",
+]
+addopts = [
+    "--strict-markers",
+    "-x",
+    "--tb=short",
+]
 
 [tool.importlinter]
 root_packages = ["harness_stata"]

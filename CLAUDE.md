@@ -60,9 +60,37 @@ harness-stata/
 - `subgraphs/` 仅暴露工厂函数，内部结构（如探针子图的 variable_dispatcher、result_handler）作为工厂模块的私有实现
 - 所有外部依赖（MCP 服务、LLM）必须通过 `clients/` 进入；节点代码不得直接 import `packages/` 中的 service 层，也不得直接 import `langchain_openai` / `openai` 等 LLM SDK
 
+## TDD 工作流约定
+
+### 红-绿-重构循环
+
+实现任何新节点或修改现有节点时，遵循以下顺序：
+1. **红**：先在 `tests/nodes/` 下编写测试，运行确认失败
+2. **绿**：在 `src/` 中写最少量实现代码使测试通过
+3. **重构**：在测试保护下优化实现，确保测试持续通过
+
+### 测试文件组织
+
+- 测试目录镜像 `src/harness_stata/` 结构
+- 测试文件命名：`test_<module>.py`（与被测模块同名）
+- 单元测试 mock 所有外部依赖（LLM、MCP），不依赖网络或环境变量
+- 集成测试使用 `@pytest.mark.integration` 标记，门禁中不运行
+
+### 何时必须写测试
+
+- 新增或修改 `nodes/` 中的节点函数：必须有对应单元测试
+- 新增或修改 `subgraphs/` 中的子图工厂：必须有对应单元测试
+- `config/state/clients/prompts` 等声明式代码：不要求测试
+
+### 运行测试
+
+- 单元测试：`.venv/Scripts/python.exe -m pytest`
+- 集成测试：`.venv/Scripts/python.exe -m pytest -m integration`
+- 全部测试：`.venv/Scripts/python.exe -m pytest -m ""`
+
 ## Session 收尾流程
 
-- 完成任何文件变更后运行.venv/Scripts/python.exe scripts/check.py统一质量门禁。一次性跑完 ruff、pyright、import-linter、custom-lint全部检查
+- 完成任何文件变更后运行`.venv/Scripts/python.exe scripts/check.py`统一质量门禁。一次性跑完 pytest、ruff、pyright、import-linter、custom-lint 全部检查
 - 完成任何实质进展后更新 `PROGRESS.md`：
   1. 推进"当前焦点"和"已完成"
   2. 从"下一步"移走已做完的项

@@ -21,3 +21,11 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+
+      - id: pytest
+        name: pytest (unit only)
+        entry: python -m pytest -x --tb=line -q -m "not integration"
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true
