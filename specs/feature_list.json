@@ -215,7 +215,7 @@
         "单元测试覆盖正常完成与强制截断两种出口"
       ],
       "depends_on": ["F02"],
-      "passes": false
+      "passes": true
     },
     {
       "id": "F20",
