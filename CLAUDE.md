@@ -1,4 +1,6 @@
-# AGENTS.md — Harness-Stata
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## 项目简介
 
@@ -58,12 +60,12 @@ harness-stata/
 - `subgraphs/` 仅暴露工厂函数，内部结构（如探针子图的 variable_dispatcher、result_handler）作为工厂模块的私有实现
 - 所有外部依赖（MCP 服务、LLM）必须通过 `clients/` 进入；节点代码不得直接 import `packages/` 中的 service 层，也不得直接 import `langchain_openai` / `openai` 等 LLM SDK
 
-## Session 流程
+## Session 收尾流程
 
-- **开局**：运行 `python scripts/init.py`——一次性拉出质量门禁状态、最近 git 提交、`docs/PROGRESS.md` 内容
-- **收尾**：完成任何实质进展后更新 `docs/PROGRESS.md`
-  - 推进"当前焦点"和"已完成"
-  - 从"下一步"移走已做完的项
-  - 发现/解决的卡点进"未解决/卡点"
-  - 某个 section 长期空着 → 删除该 section；需要时再加回来
-- 进度文件是跨 session 记忆的唯一指定载体，git log 负责记录动作，PROGRESS.md 负责传递意图
+- 完成任何文件变更后运行.venv/Scripts/python.exe scripts/check.py统一质量门禁。一次性跑完 ruff、pyright、import-linter、custom-lint全部检查
+- 完成任何实质进展后更新 `PROGRESS.md`：
+  1. 推进"当前焦点"和"已完成"
+  2. 从"下一步"移走已做完的项
+  3. 发现/解决的卡点进"未解决/卡点"
+  4. 某个 section 长期空着 → 删除该 section；需要时再加回来
+  5. 进度文件是跨 session 记忆的唯一指定载体，git log 负责记录动作，PROGRESS.md 负责传递意图

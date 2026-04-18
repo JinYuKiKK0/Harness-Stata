@@ -43,6 +43,20 @@
 
 ### 5. 状态切片内部字段定义
 
+#### 入口输入
+
+**UserRequest**
+
+由 CLI 入口或 graph.invoke() 调用方写入,需求解析节点读取。
+
+| 字段           | 类型                                            | 说明                         |
+| -------------- | ----------------------------------------------- | ---------------------------- |
+| x_variable     | str                                             | 核心解释变量描述             |
+| y_variable     | str                                             | 被解释变量描述               |
+| sample_scope   | str                                             | 样本范围 e.g. "A股上市公司"  |
+| time_range     | TimeRange                                       | 时间范围                     |
+| data_frequency | "yearly" \| "quarterly" \| "monthly" \| "daily" | 数据频率                     |
+
 #### 共享类型
 
 **VariableDefinition**

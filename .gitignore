@@ -8,3 +8,6 @@ __pycache__/
 packages/
 .agents/
 .claude/
+uv.lock
+.env
+docs/harness

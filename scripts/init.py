@@ -4,7 +4,7 @@
 执行内容：
 1. 跑全套质量门禁（scripts/check.py：ruff / pyright / import-linter / custom lint）
 2. 展示最近若干条 git 提交，帮助 Claude 快速对齐项目最近的演进
-3. 输出 docs/PROGRESS.md 的内容，让 Claude 立刻知道当前焦点与下一步
+3. 输出 PROGRESS.md 的内容，让 Claude 立刻知道当前焦点与下一步
 
 用法：
     python scripts/init.py
@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PROGRESS_FILE = ROOT / "docs" / "PROGRESS.md"
+PROGRESS_FILE = ROOT / "PROGRESS.md"
 GIT_LOG_COUNT = 10
 
 

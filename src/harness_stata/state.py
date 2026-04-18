@@ -3,16 +3,31 @@
 See docs/state.md for the design rationale. All slices are TypedDicts;
 WorkflowState composes them flatly with incremental population semantics
 (``total=False``).
+所有针对本项目状态定义的修改都必须同步更新 docs/state.md 中的设计文档,以保持文档与代码的一致性。
 """
 
 from __future__ import annotations
 
 from typing import Literal, TypedDict
 
-
 # ---------------------------------------------------------------------------
 # Shared types
 # ---------------------------------------------------------------------------
+
+
+class TimeRange(TypedDict):
+    start: str
+    end: str
+
+
+class UserRequest(TypedDict):
+    """User-provided empirical analysis requirements (5 mandatory fields)."""
+
+    x_variable: str
+    y_variable: str
+    sample_scope: str
+    time_range: TimeRange
+    data_frequency: Literal["yearly", "quarterly", "monthly", "daily"]
 
 
 class VariableDefinition(TypedDict):
@@ -20,11 +35,6 @@ class VariableDefinition(TypedDict):
     description: str
     contract_type: Literal["hard", "soft"]
     role: Literal["dependent", "independent", "control"]
-
-
-class TimeRange(TypedDict):
-    start: str
-    end: str
 
 
 class CoreHypothesis(TypedDict):
@@ -150,6 +160,7 @@ WorkflowStatus = Literal[
 
 
 class WorkflowState(TypedDict, total=False):
+    user_request: UserRequest
     empirical_spec: EmpiricalSpec
     model_plan: ModelPlan
     probe_report: ProbeReport

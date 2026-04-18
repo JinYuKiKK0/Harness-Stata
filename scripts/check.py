@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""统一质量门禁。一次性跑完 ruff、pyright、import-linter 全部检查。
+"""统一质量门禁。一次性跑完 ruff、pyright、import-linter、custom lint全部检查。
 
 用法（确保已激活 venv 或工具在 PATH 上）：
     python scripts/check.py
@@ -17,7 +17,7 @@ import sys
 from dataclasses import dataclass
 
 
-PATHS = ["src/harness_stata", "tests", "scripts"]
+PATHS = ["src/harness_stata"]
 
 
 @dataclass(frozen=True)

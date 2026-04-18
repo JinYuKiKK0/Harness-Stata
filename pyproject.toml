@@ -10,11 +10,13 @@ requires-python = ">=3.12"
 dependencies = [
     "langgraph>=0.2.0",
     "langchain>=0.3.0",
-    "langchain-openai>=0.2.0",
+    "langchain-community>=0.3.0",
+    "dashscope>=1.20.0",
     "langchain-mcp-adapters>=0.1.0",
     "pandas>=2.2.0",
     "pydantic>=2.8.0",
     "typer>=0.12.0",
+    "langchain-core>=1.2.29",
 ]
 
 [project.optional-dependencies]
@@ -104,17 +106,16 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = """[llm-single-entry] 仅 clients/llm.py 可以 import langchain_openai / openai——LLM 客户端必须经 clients/llm.py 统一封装。
+name = """[llm-single-entry] 仅 clients/llm.py 可以 import langchain_community / openai——LLM 客户端必须经 clients/llm.py 统一封装。
 Fix: 改为 from harness_stata.clients.llm import <factory>，复用统一的 LLM 客户端构造方式。如果当前 clients/llm.py 没有覆盖你的需求，应当扩展 llm.py 而不是绕过。"""
 type = "forbidden"
 source_modules = ["harness_stata"]
 forbidden_modules = [
-    "langchain_openai",
+    "langchain_community",
     "openai",
 ]
 ignore_imports = [
-    "harness_stata.clients.llm -> langchain_openai",
-    "harness_stata.clients.llm -> openai",
+    "harness_stata.clients.llm -> langchain_community",
 ]
 
 [[tool.importlinter.contracts]]

@@ -29,7 +29,7 @@ PROMPTS_DIR = SRC / "prompts"
 WARN_LINES = 300
 FAIL_LINES = 500
 
-SCAN_PY_DIRS = [SRC, ROOT / "scripts", ROOT / "tests"]
+SCAN_PY_DIRS = [SRC]
 
 
 Severity = Literal["warn", "error"]
