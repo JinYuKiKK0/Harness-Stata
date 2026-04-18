@@ -27,6 +27,7 @@ class Settings:
     stata_executable: str
     stata_edition: str
     downloads_root: Path
+    per_variable_max_calls: int
 
 
 def _load_env() -> dict[str, str]:
@@ -61,6 +62,22 @@ def get_settings() -> Settings:
         Path(downloads_root_raw) if downloads_root_raw else PROJECT_ROOT / "downloads"
     ).resolve()
 
+    per_var_raw = env.get("HARNESS_PER_VARIABLE_MAX_CALLS", "4")
+    try:
+        per_variable_max_calls = int(per_var_raw)
+    except ValueError as exc:
+        msg = (
+            f"HARNESS_PER_VARIABLE_MAX_CALLS={per_var_raw!r} 必须是整数。"
+            " 请在项目根 .env 中修正取值。"
+        )
+        raise RuntimeError(msg) from exc
+    if per_variable_max_calls < 1:
+        msg = (
+            f"HARNESS_PER_VARIABLE_MAX_CALLS={per_variable_max_calls} 必须 >= 1。"
+            " 每个变量至少需要 1 轮探针调用。"
+        )
+        raise RuntimeError(msg)
+
     return Settings(
         dashscope_api_key=api_key,
         llm_model_name=env.get("LLM_MODEL", "qwen-plus"),
@@ -70,4 +87,5 @@ def get_settings() -> Settings:
         stata_executable=stata_executable,
         stata_edition=env.get("STATA_EXECUTOR_EDITION", "mp"),
         downloads_root=downloads_root,
+        per_variable_max_calls=per_variable_max_calls,
     )

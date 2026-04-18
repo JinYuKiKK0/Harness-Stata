@@ -288,7 +288,7 @@
         "单元测试覆盖字段映射与错误传播（mock tools + mock subgraph.invoke）"
       ],
       "depends_on": ["F13", "F15", "F16"],
-      "passes": false
+      "passes": true
     }
   ]
 }
