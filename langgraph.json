@@ -1,0 +1,9 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "harness_stata": "./src/harness_stata/studio.py:graph"
+  },
+  "env": ".env"
+}

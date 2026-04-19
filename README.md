@@ -33,6 +33,7 @@
 
 - **运行时**：Python 3.12
 - **编排**：langgraph、langchain、langchain-core
+- **观测 / 调试**：LangSmith Studio（本地 Agent Server）
 - **LLM**：DashScope ChatTongyi（qwen-plus），通过 `langchain-community`
 - **MCP 集成**：`langchain-mcp-adapters`，经 MCP 协议调用 `packages/csmar-mcp` 与 `packages/stata-executor`
 - **数据处理**：pandas
@@ -83,9 +84,15 @@ uv sync --all-extras
 
 ```
 DASHSCOPE_API_KEY=sk-xxx
+CSMAR_ACCOUNT=
+CSMAR_PASSWORD=
+STATA_EXECUTOR_STATA_EXECUTABLE=
+STATA_EXECUTOR_EDITION=mp
+LANGSMITH_API_KEY=lsv2-xxx
 ```
 
 > 配置仅从 `.env` 注入，不从系统环境变量回退读取。
+> 若只想使用 Studio 本地调试界面而不上传 tracing，可额外设置 `LANGSMITH_TRACING=false`。
 
 ### 3. 质量门禁
 
@@ -95,13 +102,16 @@ DASHSCOPE_API_KEY=sk-xxx
 
 一次跑完 pytest、ruff、pyright、import-linter、custom-lint。
 
-### 4. 运行 CLI
+
+### 4. 连接 LangSmith Studio
+
+项目已包含 Studio 所需的 `langgraph.json`，指向 `src/harness_stata/studio.py` 暴露的编译图对象。
+
+启动本地 Agent Server：
 
 ```bash
-harness-stata ...
+uv run langgraph dev
 ```
-
-> CLI 入口（F24）尚未落地，命令签名待定。
 
 ## 开发约定
 

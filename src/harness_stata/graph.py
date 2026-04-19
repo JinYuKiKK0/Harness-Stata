@@ -66,8 +66,16 @@ def route_after_hitl(state: WorkflowState) -> Literal["rejected", "approved"]:
     return "approved"
 
 
-def build_graph() -> CompiledStateGraph[WorkflowState, None, WorkflowState, WorkflowState]:
-    """Assemble and compile the main workflow graph with an in-memory checkpointer."""
+def build_graph(
+    *, use_checkpointer: bool = True
+) -> CompiledStateGraph[WorkflowState, None, WorkflowState, WorkflowState]:
+    """Assemble and compile the main workflow graph.
+
+    When ``use_checkpointer`` is True (default, CLI path), bind an ``InMemorySaver``
+    so ``hitl`` node's ``interrupt()`` can pause and resume. On LangGraph Platform
+    (``langgraph dev`` / Studio), persistence is managed by the platform, so pass
+    ``use_checkpointer=False`` to avoid the platform rejecting the custom saver.
+    """
     builder = StateGraph(WorkflowState)
 
     builder.add_node("requirement_analysis", requirement_analysis)  # pyright: ignore[reportUnknownMemberType]
@@ -99,4 +107,6 @@ def build_graph() -> CompiledStateGraph[WorkflowState, None, WorkflowState, Work
     builder.add_edge("descriptive_stats", "regression")  # pyright: ignore[reportUnknownMemberType]
     builder.add_edge("regression", END)  # pyright: ignore[reportUnknownMemberType]
 
-    return builder.compile(checkpointer=InMemorySaver())  # pyright: ignore[reportUnknownMemberType]
+    if use_checkpointer:
+        return builder.compile(checkpointer=InMemorySaver())  # pyright: ignore[reportUnknownMemberType]
+    return builder.compile()  # pyright: ignore[reportUnknownMemberType]

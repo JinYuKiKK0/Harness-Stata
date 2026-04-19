@@ -28,6 +28,7 @@ harness-stata/
 │   ├── config.py                 # 配置
 │   ├── cli.py                    # typer CLI 入口
 │   ├── __main__.py               # python -m harness_stata 入口
+│   ├── studio.py                 # LangGraph Studio/Platform 入口（langgraph.json 引用）
 │   ├── nodes/                    # 主图视角下的 8 个节点
 │   │   ├── requirement_analysis.py
 │   │   ├── model_construction.py

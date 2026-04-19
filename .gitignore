@@ -13,4 +13,5 @@ packages/csmar-mcp/.stata_agent/
 .claude/
 uv.lock
 .env
+.langgraph_api
 docs/harness
