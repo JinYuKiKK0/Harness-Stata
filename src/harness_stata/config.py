@@ -81,7 +81,7 @@ def get_settings() -> Settings:
     return Settings(
         dashscope_api_key=api_key,
         llm_model_name=env.get("LLM_MODEL", "qwen-plus"),
-        llm_temperature=float(env.get("LLM_TEMPERATURE", "0.0")),
+        llm_temperature=float(env.get("LLM_TEMPERATURE", "0.3")),
         csmar_account=csmar_account,
         csmar_password=csmar_password,
         stata_executable=stata_executable,

@@ -16,8 +16,9 @@ from typing import Literal, TypedDict
 
 
 class UserRequest(TypedDict):
-    """User-provided empirical analysis requirements (6 mandatory fields)."""
+    """User-provided empirical analysis requirements (7 mandatory fields)."""
 
+    topic: str
     x_variable: str
     y_variable: str
     sample_scope: str

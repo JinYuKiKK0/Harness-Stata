@@ -21,7 +21,6 @@ from harness_stata.state import UserRequest, WorkflowState
 
 def _realistic_spec() -> _EmpiricalSpecModel:
     return _EmpiricalSpecModel(
-        topic="公司治理质量对财务绩效的影响",
         variables=[
             _VariableDefinitionModel(
                 name="ROA",

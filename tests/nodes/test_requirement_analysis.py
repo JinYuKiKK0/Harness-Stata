@@ -21,6 +21,7 @@ from harness_stata.state import UserRequest, WorkflowState
 class TestFormatUserMessage:
     def test_all_fields_present(self, make_user_request: Callable[..., UserRequest]) -> None:
         msg = _format_user_message(make_user_request())
+        assert "公司治理质量对财务绩效的影响研究" in msg
         assert "公司治理质量" in msg
         assert "ROA" in msg
         assert "A股上市公司" in msg
@@ -47,7 +48,6 @@ class TestFormatUserMessage:
 def _make_fake_spec() -> _EmpiricalSpecModel:
     """Build a realistic _EmpiricalSpecModel for mock returns."""
     return _EmpiricalSpecModel(
-        topic="公司治理质量对财务绩效的影响研究",
         variables=[
             _VariableDefinitionModel(
                 name="ROA",

@@ -176,6 +176,7 @@ async def _drive_graph(initial: WorkflowState, thread_id: str) -> dict[str, Any]
 
 @app.command()
 def run(
+    topic: str = typer.Option(..., "--topic", help="Research topic (one sentence summary of X→Y)."),
     x_variable: str = typer.Option(..., "--x-variable", help="Core explanatory variable."),
     y_variable: str = typer.Option(..., "--y-variable", help="Dependent variable."),
     sample_scope: str = typer.Option(..., "--sample-scope", help="Sample scope description."),
@@ -190,6 +191,7 @@ def run(
 ) -> None:
     """Run the empirical analysis workflow end-to-end."""
     request: UserRequest = {
+        "topic": topic,
         "x_variable": x_variable,
         "y_variable": y_variable,
         "sample_scope": sample_scope,

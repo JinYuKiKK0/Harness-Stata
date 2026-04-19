@@ -30,6 +30,7 @@ def _safe_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _make_user_request(**overrides: Any) -> UserRequest:
     defaults: UserRequest = {
+        "topic": "公司治理质量对财务绩效的影响研究",
         "x_variable": "公司治理质量",
         "y_variable": "ROA",
         "sample_scope": "A股上市公司",

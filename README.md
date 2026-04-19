@@ -83,12 +83,19 @@ uv sync --all-extras
 在项目根创建 `.env`：
 
 ```
-DASHSCOPE_API_KEY=sk-xxx
-CSMAR_ACCOUNT=
-CSMAR_PASSWORD=
-STATA_EXECUTOR_STATA_EXECUTABLE=
-STATA_EXECUTOR_EDITION=mp
-LANGSMITH_API_KEY=lsv2-xxx
+必填
+DASHSCOPE_API_KEY=
+CSMAR_ACCOUNT=      # CSMAR账号
+CSMAR_PASSWORD=     # CSMAR密码
+STATA_EXECUTOR_STATA_EXECUTABLE='C:/Program Files/Stata17/StataMP-64.exe'   Stata执行程序路径
+选填
+STATA_EXECUTOR_EDITION=mp   # Stata版本
+LANGSMITH_API_KEY=   # LangSmith key
+LLM_MODEL=      # 模型编号 
+LLM_TEMPERATURE=0.5     # 模型温度
+HARNESS_DOWNLOADS_ROOT=/downloads   # CSMAR数据下载解压路径
+HARNESS_PER_VARIABLE_MAX_CALLS=6    # 单个变量CSMAR api最大调用次数，避免Agent无限调用触发账号日限流
+
 ```
 
 > 配置仅从 `.env` 注入，不从系统环境变量回退读取。
@@ -97,7 +104,7 @@ LANGSMITH_API_KEY=lsv2-xxx
 ### 3. 质量门禁
 
 ```bash
-.venv/Scripts/python.exe scripts/check.py
+uv run scripts/check.py
 ```
 
 一次跑完 pytest、ruff、pyright、import-linter、custom-lint。

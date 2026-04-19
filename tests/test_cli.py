@@ -23,6 +23,7 @@ from harness_stata.state import WorkflowState
 
 _REQUIRED_ARGS = [
     "run",
+    "--topic", "数字化转型对盈利能力的影响",
     "--x-variable", "DIGITAL",
     "--y-variable", "ROA",
     "--sample-scope", "A股上市公司",
