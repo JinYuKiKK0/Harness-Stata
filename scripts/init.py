@@ -37,19 +37,12 @@ def run(header: str, cmd: list[str]) -> int:
 def main() -> int:
     quality_code = run(
         "Step 1/2  质量门禁",
-        [sys.executable, "scripts/check.py"],
+        ["uv", "run", "--", "python", "scripts/check.py"],
     )
     log_code = run(
         f"Step 2/2  最近 {GIT_LOG_COUNT} 条 git 提交",
         ["git", "log", "-n", str(GIT_LOG_COUNT), "--oneline", "--decorate"],
     )
-
-    print(f"\n{'=' * 60}")
-    print("Session init summary")
-    print("=" * 60)
-    print(f"  质量门禁   : {'PASS' if quality_code == 0 else 'FAIL'}")
-    print(f"  git log    : {'OK' if log_code == 0 else 'FAIL'}")
-    print()
 
     return 0 if quality_code == 0 and log_code == 0 else 1
 
