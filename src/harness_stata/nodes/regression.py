@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, TypedDict, cast
 
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -152,7 +152,12 @@ def _compute_sign_check(plan: ModelPlan, actual_sign: str) -> SignCheck:
     }
 
 
-async def regression(state: WorkflowState) -> dict[str, Any]:
+class RegressionOutput(TypedDict):
+    regression_result: RegressionResult
+    workflow_status: Literal["success"]
+
+
+async def regression(state: WorkflowState) -> RegressionOutput:
     """Run the baseline regression and produce the terminal RegressionResult.
 
     Drives a generic ReAct subgraph bound to the stata-executor MCP tools.

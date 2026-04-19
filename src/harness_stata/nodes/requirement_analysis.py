@@ -6,14 +6,14 @@ Single-turn LLM call that parses user requirements into a structured
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal, TypedDict, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from harness_stata.clients.llm import get_chat_model
 from harness_stata.prompts import load_prompt
-from harness_stata.state import UserRequest, WorkflowState
+from harness_stata.state import EmpiricalSpec, UserRequest, WorkflowState
 
 # ---------------------------------------------------------------------------
 # Pydantic models (node-private, used for with_structured_output schema)
@@ -51,7 +51,11 @@ class _EmpiricalSpecModel(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def requirement_analysis(state: WorkflowState) -> dict[str, Any]:
+class RequirementAnalysisOutput(TypedDict):
+    empirical_spec: EmpiricalSpec
+
+
+def requirement_analysis(state: WorkflowState) -> RequirementAnalysisOutput:
     """Parse user requirements into a structured EmpiricalSpec."""
     # user_request is guaranteed to be present: it is set as initial state by the CLI
     user_req: UserRequest = state["user_request"]  # type: ignore[reportTypedDictNotRequiredAccess]
@@ -70,7 +74,8 @@ def requirement_analysis(state: WorkflowState) -> dict[str, Any]:
     )
 
     assert isinstance(result, _EmpiricalSpecModel)
-    return {"empirical_spec": {"topic": user_req["topic"], **result.model_dump()}}
+    spec = cast("EmpiricalSpec", {"topic": user_req["topic"], **result.model_dump()})
+    return {"empirical_spec": spec}
 
 
 def _format_user_message(user_req: UserRequest) -> str:

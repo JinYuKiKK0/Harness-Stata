@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -116,7 +116,11 @@ def _assert_file_exists(path_str: str, role: str) -> None:
         raise RuntimeError(msg)
 
 
-async def descriptive_stats(state: WorkflowState) -> dict[str, Any]:
+class DescriptiveStatsOutput(TypedDict):
+    desc_stats_report: DescStatsReport
+
+
+async def descriptive_stats(state: WorkflowState) -> DescriptiveStatsOutput:
     """Run descriptive statistics and produce DescStatsReport.
 
     Drives a generic ReAct subgraph bound to the stata-executor MCP tools.

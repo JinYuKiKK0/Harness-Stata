@@ -50,8 +50,8 @@ harness-stata/
 │   ├── csmar-mcp/                # 独立 MCP 服务，主应用通过 MCP 协议调用
 │   └── stata-executor/           # 同上
 ├── docs/
-│   ├── empirical-analysis-workflow.md
-│   └── state.md
+│   ├── empirical-analysis-workflow.md # 关键文档：实证工作流链路设计文档，包含状态机的节点设计、拓扑结构以及节点输入输出切片
+│   └── state.md # 各节点输入输出的切片schema结构和字段定义
 └── tests/
 ```
 

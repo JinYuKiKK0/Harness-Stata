@@ -15,12 +15,18 @@ routing to END.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Literal, TypedDict, cast
 
 from harness_stata.clients.csmar import get_csmar_tools
 from harness_stata.config import get_settings
 from harness_stata.prompts import load_prompt
-from harness_stata.state import EmpiricalSpec, ModelPlan, WorkflowState
+from harness_stata.state import (
+    DownloadManifest,
+    EmpiricalSpec,
+    ModelPlan,
+    ProbeReport,
+    WorkflowState,
+)
 from harness_stata.subgraphs.probe_subgraph import ProbeState, build_probe_subgraph
 
 # ---------------------------------------------------------------------------
@@ -44,7 +50,14 @@ def _validate(state: WorkflowState) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-async def data_probe(state: WorkflowState) -> dict[str, Any]:
+class DataProbeOutput(TypedDict, total=False):
+    probe_report: ProbeReport
+    download_manifest: DownloadManifest
+    empirical_spec: EmpiricalSpec
+    workflow_status: Literal["failed_hard_contract"]
+
+
+async def data_probe(state: WorkflowState) -> DataProbeOutput:
     """Probe variable availability in CSMAR; emit probe_report + download_manifest."""
     err = _validate(state)
     if err is not None:
@@ -67,7 +80,7 @@ async def data_probe(state: WorkflowState) -> dict[str, Any]:
         raw_final = subgraph.invoke(initial)  # pyright: ignore[reportUnknownMemberType]
         final = cast("ProbeState", raw_final)
 
-    result: dict[str, Any] = {
+    result: DataProbeOutput = {
         "probe_report": final["probe_report"],  # type: ignore[reportTypedDictNotRequiredAccess]
         "download_manifest": final["download_manifest"],  # type: ignore[reportTypedDictNotRequiredAccess]
     }

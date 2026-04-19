@@ -11,12 +11,13 @@ docs/empirical-analysis-workflow.md.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, Literal, TypedDict, cast
 
 from langgraph.types import interrupt
 
 from harness_stata.state import (
     EmpiricalSpec,
+    HitlDecision,
     ModelPlan,
     ProbeReport,
     VariableDefinition,
@@ -220,7 +221,12 @@ def _request_decision(plan_text: str) -> dict[str, Any]:
     raise ValueError(f"HITL decision validation failed after {_MAX_INTERRUPT_ATTEMPTS} attempts")
 
 
-def _build_return(decision: dict[str, Any]) -> dict[str, Any]:
+class HitlOutput(TypedDict, total=False):
+    hitl_decision: HitlDecision
+    workflow_status: Literal["rejected"]
+
+
+def _build_return(decision: dict[str, Any]) -> HitlOutput:
     approved = bool(decision["approved"])
     notes = decision.get("user_notes")
     if approved:
@@ -236,7 +242,7 @@ def _build_return(decision: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def hitl(state: WorkflowState) -> dict[str, Any]:
+def hitl(state: WorkflowState) -> HitlOutput:
     """Present research plan and collect approve/reject decision via interrupt."""
     spec: EmpiricalSpec = state["empirical_spec"]  # type: ignore[reportTypedDictNotRequiredAccess]
     plan: ModelPlan = state["model_plan"]  # type: ignore[reportTypedDictNotRequiredAccess]

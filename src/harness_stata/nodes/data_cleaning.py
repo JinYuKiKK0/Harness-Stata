@@ -17,7 +17,7 @@ import json
 import re
 import traceback
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 
 import pandas as pd
 from langchain_core.messages import AIMessage, HumanMessage
@@ -191,7 +191,11 @@ def _check_post_conditions(
     return row_count, columns, warnings
 
 
-async def data_cleaning(state: WorkflowState) -> dict[str, Any]:
+class DataCleaningOutput(TypedDict):
+    merged_dataset: MergedDataset
+
+
+async def data_cleaning(state: WorkflowState) -> DataCleaningOutput:
     """Merge DownloadedFiles into a single long-format CSV.
 
     Drives a generic ReAct subgraph bound to one ``run_python`` tool. The LLM
