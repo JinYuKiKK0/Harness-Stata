@@ -45,8 +45,13 @@ def _validate(state: WorkflowState) -> str | None:
 
 
 def _derive_session_dir(merged_path: str) -> Path:
-    """Place do/log alongside merged.csv (F20 session_dir convention)."""
-    return Path(merged_path).resolve().parent
+    """Place do/log alongside merged.csv (F20 session_dir convention).
+
+    ``merged_path`` is guaranteed absolute by F20. We avoid ``Path.resolve()``
+    because on Windows it calls ``os.getcwd()`` inside the event loop, which
+    blockbuster intercepts under ``langgraph dev``.
+    """
+    return Path(merged_path).parent
 
 
 def _build_human_prompt(

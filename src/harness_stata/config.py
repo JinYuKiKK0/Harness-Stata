@@ -58,9 +58,11 @@ def get_settings() -> Settings:
         raise RuntimeError(msg)
 
     downloads_root_raw = env.get("HARNESS_DOWNLOADS_ROOT")
-    downloads_root = (
-        Path(downloads_root_raw) if downloads_root_raw else PROJECT_ROOT / "downloads"
-    ).resolve()
+    if downloads_root_raw:
+        candidate = Path(downloads_root_raw)
+        downloads_root = candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
+    else:
+        downloads_root = PROJECT_ROOT / "downloads"
 
     per_var_raw = env.get("HARNESS_PER_VARIABLE_MAX_CALLS", "4")
     try:

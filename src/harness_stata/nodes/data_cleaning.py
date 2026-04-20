@@ -75,8 +75,13 @@ def _validate(state: WorkflowState) -> str | None:
 
 
 def _derive_output_path(files: list[DownloadedFile]) -> Path:
-    """Place merged CSV alongside F18's session dir: ``<session>/merged.csv``."""
-    first = Path(files[0]["path"]).resolve()
+    """Place merged CSV alongside F18's session dir: ``<session>/merged.csv``.
+
+    ``files[*].path`` is guaranteed absolute by F18 (download node), so we do
+    not call ``Path.resolve()`` — on Windows that would hit ``os.getcwd()``
+    inside the event loop and trigger blockbuster under ``langgraph dev``.
+    """
+    first = Path(files[0]["path"])
     return first.parents[1] / _MERGED_FILENAME
 
 
