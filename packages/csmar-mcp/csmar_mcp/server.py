@@ -299,8 +299,8 @@ def csmar_get_table_schema(table_code: str) -> CallToolResult:
 @mcp.tool(
     name="csmar_probe_query",
     description=(
-        "Probe a query before materialization. Returns validation_id, query_fingerprint, row_count, sample_rows, "
-        "invalid_columns, and can_materialize."
+        "Probe a query before materialization. start_date and end_date (YYYY-MM-DD) are required. "
+        "Returns validation_id, query_fingerprint, row_count, sample_rows, invalid_columns, and can_materialize."
     ),
     annotations=ToolAnnotations(
         title="Probe Query",
@@ -314,9 +314,9 @@ def csmar_get_table_schema(table_code: str) -> CallToolResult:
 def csmar_probe_query(
     table_code: str,
     columns: list[str],
+    start_date: str,
+    end_date: str,
     condition: str | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
     sample_rows: int = 3,
 ) -> CallToolResult:
     started_at = _now_utc()

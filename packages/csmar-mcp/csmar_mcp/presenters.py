@@ -54,10 +54,15 @@ def invalid_arguments(error: ValidationError) -> CallToolResult:
         message = item.get("msg", "invalid value")
         issues.append(f"{location}: {message}" if location else message)
 
+    hint = (
+        "Fix these fields and retry with the same tool: " + "; ".join(issues)
+        if issues
+        else "Fix the invalid fields and retry with the same tool."
+    )
     tool_error = ToolError(
         code="invalid_arguments",
         message="The tool arguments are invalid.",
-        hint="Fix the invalid fields and retry with the same tool.",
+        hint=hint,
     )
     return failure(tool_error)
 
