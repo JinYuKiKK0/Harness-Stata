@@ -34,11 +34,27 @@ from harness_stata.state import (
 # ---------------------------------------------------------------------------
 
 
-def _patch_csmar(mocker: MockerFixture) -> list[MagicMock]:
-    """Replace get_csmar_tools with a no-op async contextmanager yielding tools."""
+def _patch_csmar(
+    mocker: MockerFixture, *, include_list_databases: bool = True
+) -> list[MagicMock]:
+    """Replace get_csmar_tools with a no-op async contextmanager yielding tools.
+
+    默认包含一个 csmar_list_databases mock 供 data_probe 节点预拉数据库清单;
+    通过 ``include_list_databases=False`` 可模拟工具缺失场景 (应触发 RuntimeError)。
+    """
     probe_tool = MagicMock()
     probe_tool.name = "csmar_probe_query"
     tools: list[MagicMock] = [probe_tool]
+
+    if include_list_databases:
+        list_tool = MagicMock()
+        list_tool.name = "csmar_list_databases"
+        list_tool.ainvoke = AsyncMock(
+            return_value=(
+                'Returned 2 purchased databases.\n{"databases": ["CSMAR", "RESSET"]}'
+            )
+        )
+        tools.append(list_tool)
 
     @asynccontextmanager
     async def _cm() -> AsyncIterator[list[MagicMock]]:
@@ -287,3 +303,67 @@ def test_data_probe_subgraph_invoke_exception_propagates(
 
     with pytest.raises(RuntimeError, match="upstream MCP crashed"):
         _run(state)
+
+
+# ---------------------------------------------------------------------------
+# F26: caller-side prefetch of csmar_list_databases
+# ---------------------------------------------------------------------------
+
+
+def test_data_probe_prefetches_list_databases_once(
+    mocker: MockerFixture,
+    make_empirical_spec: Callable[..., EmpiricalSpec],
+    make_model_plan: Callable[..., ModelPlan],
+    make_probe_report: Callable[..., ProbeReport],
+) -> None:
+    tools = _patch_csmar(mocker)
+    _patch_settings(mocker)
+    spec = make_empirical_spec()
+    plan = make_model_plan()
+    final_state: dict[str, Any] = {
+        "empirical_spec": spec,
+        "model_plan": plan,
+        "probe_report": make_probe_report(),
+        "download_manifest": {"items": []},
+    }
+    factory = _patch_subgraph(mocker, final_state)
+
+    state: WorkflowState = {"empirical_spec": spec, "model_plan": plan}
+    _run(state)
+
+    # 1. list_databases 工具被调用且仅被调用一次
+    list_tool = next(t for t in tools if t.name == "csmar_list_databases")
+    list_tool.ainvoke.assert_awaited_once_with({})
+
+    # 2. 传给 build_probe_subgraph 的 tools 不含 csmar_list_databases
+    assert factory.call_count == 1
+    passed_tools = factory.call_args.kwargs["tools"]
+    assert all(t.name != "csmar_list_databases" for t in passed_tools)
+
+    # 3. ainvoke 的 initial state 带上了 available_databases 字符串
+    compiled = factory.return_value
+    initial_arg = compiled.ainvoke.call_args.args[0]
+    assert "available_databases" in initial_arg
+    assert "CSMAR" in initial_arg["available_databases"]
+    assert "RESSET" in initial_arg["available_databases"]
+
+
+def test_data_probe_raises_when_list_databases_tool_missing(
+    mocker: MockerFixture,
+    make_empirical_spec: Callable[..., EmpiricalSpec],
+    make_model_plan: Callable[..., ModelPlan],
+) -> None:
+    _patch_csmar(mocker, include_list_databases=False)
+    _patch_settings(mocker)
+    factory = _patch_subgraph(mocker, {})
+
+    state: WorkflowState = {
+        "empirical_spec": make_empirical_spec(),
+        "model_plan": make_model_plan(),
+    }
+
+    with pytest.raises(RuntimeError, match="csmar_list_databases not found"):
+        _run(state)
+
+    # 预拉失败时不应触达 subgraph 构造
+    assert factory.call_count == 0

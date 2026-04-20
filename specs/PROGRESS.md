@@ -2,13 +2,32 @@
 
 ## 当前焦点
 
-MVP 所有 25 个 feature (F01-F25) `passes=true`,可交付。本次会话对 `langgraph dev` 调试时暴露的两个问题做了根治修复:model_construction prompt 输出占位符公式 → 改为 LaTeX 源码 + 真实变量名代入;data_probe 在 ASGI 下 `BlockingError` → generic_react / probe_subgraph 子图全链路转 async,data_probe 改走 `await subgraph.ainvoke(...)`。
+F26 — data_probe 子图启动时一次性预拉 csmar_list_databases 并注入 ProbeState,消除每个变量 ReAct 重复调用 list_databases 的预算浪费。同时在 CLAUDE.md 技术栈段记录两条战略决策:LangGraph SqliteSaver (MVP) → PostgresSaver (Web) 和 DuckDB 作为数据清洗引擎 (后续 data_cleaning 重构的方向)。
+
+MVP 前 25 个 feature (F01-F25) 已 `passes=true`。
 
 ## 当前上下文
 
 <!-- 每个会话覆盖此部分。保持简洁。 -->
 
-- 本次 bug fix:
+- F26 (本次会话) — 数据探针 list_databases 缓存:
+  - 根因:`csmar_list_databases` 是零参数确定性枚举,当前由每个变量的 ReAct 单独调用,浪费 1 轮 per_variable_max_calls 预算;csmar-mcp 服务端已有 30 min SQLite cache 但省不了 LLM token 与轮次
+  - 架构决策:caller-side 预拉(不加 preamble 节点保持 subgraph 3 节点不漂移);存会话内存 ProbeState.available_databases (str);`data_probe.py` 节点过滤 + `build_probe_subgraph` 防御性再过滤
+  - 变更:
+    - `src/harness_stata/subgraphs/probe_subgraph.py`:ProbeState 增 `available_databases: str`;`bound_tools` 过滤 `csmar_list_databases` 且空列表时 ValueError;`_variable_react` HumanMessage 追加 "Purchased databases: ..." 块 + "Do NOT call any list_databases tool" 指令
+    - `src/harness_stata/nodes/data_probe.py`:进入 subgraph 前 `list_tool.ainvoke({})` 拉一次,`str(raw)` 注入 initial state;工具缺失硬抛 RuntimeError
+    - `src/harness_stata/prompts/data_probe.md`:工具说明段移除 "列举数据库";探测策略步骤 1 改为 "从用户消息中列出的已购数据库清单里选"
+    - `tests/nodes/test_data_probe.py`:`_patch_csmar` 默认带 list_databases mock(return '..."CSMAR", "RESSET"..."');新增 `test_data_probe_prefetches_list_databases_once` 与 `test_data_probe_raises_when_list_databases_tool_missing`
+    - `tests/subgraphs/test_probe_subgraph.py`:新增 `TestAvailableDatabasesInjection` (注入/回落两例) 与 `TestToolFiltering` (bind_tools 参数不含 list_databases / 仅 list_databases 时 ValueError)
+    - `CLAUDE.md` 技术栈段追加 SqliteSaver + DuckDB 两行战略决策
+    - `specs/feature_list.json` 新增 F26 (depends_on: F15, F25)
+  - 设计取舍:
+    - **D1 存储层**:ProbeState 会话内存 + csmar-mcp TTL 兜底(拒绝在主应用引入 PG 二级缓存,避免 ownership 分裂)
+    - **D2 拉取位置**:caller-side (data_probe.py) 而非 subgraph preamble — 保持 subgraph 3 节点 FSM 不漂移 `docs/empirical-analysis-workflow.md`
+    - **D3 字段类型**:`available_databases: str` 原始工具输出字符串(YAGNI,不做 JSON 解析;LLM 能直接读)
+    - **D4 工具过滤**:caller 过滤 + subgraph 防御性再过滤(双保险)
+    - **D5 失败语义**:list_databases 调用失败直接 RuntimeError(CSMAR 不可达时降级无意义)
+- 先前 bug fix:
   - `src/harness_stata/prompts/model_construction.md`:删除"用 Y/X/Z 占位符, 无需替换具体变量名"条款;改写"数学方程式"小节为 LaTeX 硬约束 (`$$...$$` 包裹、`\alpha` / `\beta_1` / `\gamma_k` / `\sum_{k=1}^{n}` / `\mu_i` / `\delta_t` / `\varepsilon_{i,t}`、下标 `_{i,t}`);5 类模型示例全部重写成 LaTeX 源码,并示范 dependent/independent 变量名代入、控制变量用向量形式
   - `src/harness_stata/nodes/model_construction.py`:`_ModelPlanModel.equation` Field description 同步加 LaTeX 硬约束,with_structured_output 会把该 description 注入 tool schema
   - `src/harness_stata/subgraphs/generic_react.py`:`_agent` / `_tool_executor` 改 async def,`model.invoke` → `await model.ainvoke`,`tool_obj.invoke` → `await tool_obj.ainvoke`

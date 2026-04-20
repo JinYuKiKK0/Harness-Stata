@@ -69,14 +69,27 @@ async def data_probe(state: WorkflowState) -> DataProbeOutput:
     settings = get_settings()
 
     async with get_csmar_tools() as tools:
+        # 预拉已购数据库清单:list_databases 是零参数确定性枚举,不应让每个变量的
+        # ReAct 单独消耗一轮预算去调用。csmar-mcp 服务端的 SQLite cache 兜底
+        # 使得重复启动工作流时这一次调用成本接近 0。
+        list_tool = next((t for t in tools if t.name == "csmar_list_databases"), None)
+        if list_tool is None:
+            raise RuntimeError(
+                "csmar_list_databases not found in csmar-mcp tool set; cannot preload databases"
+            )
+        raw_databases = await list_tool.ainvoke({})  # pyright: ignore[reportUnknownMemberType]
+        available_databases_text = str(raw_databases)
+
+        react_tools = [t for t in tools if t.name != "csmar_list_databases"]
         subgraph = build_probe_subgraph(
-            tools=tools,
+            tools=react_tools,
             prompt=load_prompt("data_probe"),
             per_variable_max_calls=settings.per_variable_max_calls,
         )
         initial: ProbeState = {
             "empirical_spec": spec,
             "model_plan": model_plan,
+            "available_databases": available_databases_text,
         }
         raw_final = await subgraph.ainvoke(initial)  # pyright: ignore[reportUnknownMemberType]
         final = cast("ProbeState", raw_final)

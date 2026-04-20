@@ -114,7 +114,8 @@ class ProbeState(TypedDict, total=False):
 
     Fields private to the subgraph (do not leak to the parent):
     ``variable_queue``, ``current_variable``, ``per_variable_call_count``,
-    ``messages``, ``queue_initialized``, ``substitute_meta``.
+    ``messages``, ``queue_initialized``, ``substitute_meta``,
+    ``available_databases``.
     """
 
     empirical_spec: EmpiricalSpec
@@ -128,6 +129,8 @@ class ProbeState(TypedDict, total=False):
     messages: list[BaseMessage]
     queue_initialized: bool
     substitute_meta: dict[str, _SubstituteMeta]
+    # caller-side 预拉的 csmar_list_databases 原始输出,拼入每变量 HumanMessage。
+    available_databases: str
 
 
 # ---------------------------------------------------------------------------
@@ -152,8 +155,11 @@ def build_probe_subgraph(
     if per_variable_max_calls < 1:
         raise ValueError("per_variable_max_calls must be >= 1")
 
-    tools_by_name: dict[str, BaseTool] = {t.name: t for t in tools}
-    bound_tools: list[BaseTool] = list(tools)
+    # 防御性过滤 list_databases —— 清单由 ProbeState.available_databases 注入。
+    bound_tools: list[BaseTool] = [t for t in tools if t.name != "csmar_list_databases"]
+    if not bound_tools:
+        raise ValueError("tools must contain at least one non-list_databases tool")
+    tools_by_name: dict[str, BaseTool] = {t.name: t for t in bound_tools}
 
     def _variable_dispatcher(state: ProbeState) -> dict[str, Any]:
         """Pop the next variable off the queue and reset per-variable state."""
@@ -180,12 +186,16 @@ def build_probe_subgraph(
         if var is None:
             return {}
 
+        db_block = state.get("available_databases") or "(unavailable)"
         messages: list[BaseMessage] = [
             SystemMessage(content=prompt),
             HumanMessage(
                 content=(
                     f"Variable: {var['name']} - {var['description']} "
-                    f"(contract: {var['contract_type']}, role: {var['role']})"
+                    f"(contract: {var['contract_type']}, role: {var['role']})\n\n"
+                    f"Purchased databases (from csmar_list_databases):\n{db_block}\n\n"
+                    "Pick the most relevant database from the list above. "
+                    "Do NOT call any list_databases tool -- it is unavailable."
                 )
             ),
         ]

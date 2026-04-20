@@ -289,6 +289,19 @@
       ],
       "depends_on": ["F13", "F15", "F16"],
       "passes": true
+    },
+    {
+      "id": "F26",
+      "description": "data_probe 节点启动时一次性预拉 csmar_list_databases 注入 ProbeState，ReAct 不再自行调用",
+      "steps": [
+        "ProbeState 增加 available_databases 字段（str）",
+        "nodes/data_probe.py 在进入 subgraph 前预拉 list_databases 并过滤工具集",
+        "build_probe_subgraph 防御性过滤 list_databases 不绑定到 ReAct 模型",
+        "HumanMessage 注入已购数据库清单文本，prompts/data_probe.md 更新策略段",
+        "单元测试覆盖 prefetch 调用、工具过滤、HumanMessage 注入、prefetch 失败硬抛"
+      ],
+      "depends_on": ["F15", "F25"],
+      "passes": true
     }
   ]
 }
