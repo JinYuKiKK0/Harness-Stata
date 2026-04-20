@@ -19,7 +19,17 @@ dependencies = [
     "typer>=0.12.0",
     "langchain-core>=1.2.29",
     "python-dotenv>=1.0.0",
+    "csmar-mcp",
+    "stata-executor",
+    "cloudpickle>=3.1.2",
 ]
+
+[tool.uv.workspace]
+members = ["packages/csmar-mcp", "packages/stata-executor"]
+
+[tool.uv.sources]
+csmar-mcp = { workspace = true }
+stata-executor = { workspace = true }
 
 [project.optional-dependencies]
 dev = [

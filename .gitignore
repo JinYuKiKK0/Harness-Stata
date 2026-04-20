@@ -15,3 +15,7 @@ uv.lock
 .env
 .langgraph_api
 docs/harness
+docs/todo.md
+/csmar-log.log
+/token.txt
+.stata_agent

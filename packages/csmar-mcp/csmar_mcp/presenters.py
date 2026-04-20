@@ -13,6 +13,21 @@ from .client import CsmarClient
 from .core.errors import CsmarError
 from .models import ToolError
 
+# Business failures the Agent can recover from via hint-driven retries.
+# Any code outside this set is treated as a hard exception (isError=True),
+# so unknown codes fail closed and interrupt the workflow.
+AGENT_RECOVERABLE_CODES: frozenset[str] = frozenset(
+    {
+        "database_not_found",
+        "table_not_found",
+        "field_not_found",
+        "not_purchased",
+        "invalid_condition",
+        "invalid_arguments",
+        "rate_limited",
+    }
+)
+
 
 def text(value: str) -> TextContent:
     return TextContent(type="text", text=value)
@@ -24,8 +39,11 @@ def success(payload: dict[str, Any], summary: str) -> CallToolResult:
 
 def failure(error: ToolError) -> CallToolResult:
     payload = error.as_dict()
+    is_hard_exception = error.code not in AGENT_RECOVERABLE_CODES
     return CallToolResult(
-        content=[text(f"[{error.code}] {error.message}")], structuredContent=payload, isError=True
+        content=[text(f"[{error.code}] {error.message}")],
+        structuredContent=payload,
+        isError=is_hard_exception,
     )
 
 
