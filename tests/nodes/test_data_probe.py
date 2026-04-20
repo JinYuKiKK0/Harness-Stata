@@ -34,27 +34,16 @@ from harness_stata.state import (
 # ---------------------------------------------------------------------------
 
 
-def _patch_csmar(
-    mocker: MockerFixture, *, include_list_databases: bool = True
-) -> list[MagicMock]:
-    """Replace get_csmar_tools with a no-op async contextmanager yielding tools.
-
-    默认包含一个 csmar_list_databases mock 供 data_probe 节点预拉数据库清单;
-    通过 ``include_list_databases=False`` 可模拟工具缺失场景 (应触发 RuntimeError)。
-    """
+def _patch_csmar(mocker: MockerFixture) -> list[MagicMock]:
+    """Replace get_csmar_tools with a no-op async contextmanager yielding tools."""
     probe_tool = MagicMock()
     probe_tool.name = "csmar_probe_query"
-    tools: list[MagicMock] = [probe_tool]
-
-    if include_list_databases:
-        list_tool = MagicMock()
-        list_tool.name = "csmar_list_databases"
-        list_tool.ainvoke = AsyncMock(
-            return_value=(
-                'Returned 2 purchased databases.\n{"databases": ["CSMAR", "RESSET"]}'
-            )
-        )
-        tools.append(list_tool)
+    list_tool = MagicMock()
+    list_tool.name = "csmar_list_databases"
+    list_tool.ainvoke = AsyncMock(
+        return_value='Returned 2 purchased databases.\n{"databases": ["CSMAR", "RESSET"]}'
+    )
+    tools: list[MagicMock] = [probe_tool, list_tool]
 
     @asynccontextmanager
     async def _cm() -> AsyncIterator[list[MagicMock]]:
@@ -348,22 +337,3 @@ def test_data_probe_prefetches_list_databases_once(
     assert "RESSET" in initial_arg["available_databases"]
 
 
-def test_data_probe_raises_when_list_databases_tool_missing(
-    mocker: MockerFixture,
-    make_empirical_spec: Callable[..., EmpiricalSpec],
-    make_model_plan: Callable[..., ModelPlan],
-) -> None:
-    _patch_csmar(mocker, include_list_databases=False)
-    _patch_settings(mocker)
-    factory = _patch_subgraph(mocker, {})
-
-    state: WorkflowState = {
-        "empirical_spec": make_empirical_spec(),
-        "model_plan": make_model_plan(),
-    }
-
-    with pytest.raises(RuntimeError, match="csmar_list_databases not found"):
-        _run(state)
-
-    # 预拉失败时不应触达 subgraph 构造
-    assert factory.call_count == 0

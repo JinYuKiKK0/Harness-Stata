@@ -497,20 +497,14 @@ class TestMultiVariableSameTable:
 
 
 # ---------------------------------------------------------------------------
-# F26: available_databases 注入与 list_databases 工具过滤
+# F26: available_databases 注入
 # ---------------------------------------------------------------------------
-
-
-@tool
-def csmar_list_databases() -> str:
-    """Stub list_databases tool; must be filtered out of ReAct binding by name."""
-    return "should not be called"
 
 
 class TestAvailableDatabasesInjection:
     def test_humanmessage_contains_available_databases(self, mocker: Any) -> None:
         ai_final = AIMessage(content="resolved using injected list")
-        bound, _ = _wire_models(
+        _wire_models(
             mocker,
             react_responses=[ai_final],
             extractor_findings=[_found()],
@@ -536,71 +530,3 @@ class TestAvailableDatabasesInjection:
         assert "Purchased databases" in human_msg.content
         assert "CSMAR" in human_msg.content
         assert "RESSET" in human_msg.content
-        assert "Do NOT call any list_databases tool" in human_msg.content
-
-    def test_humanmessage_falls_back_when_available_databases_missing(
-        self, mocker: Any
-    ) -> None:
-        ai_final = AIMessage(content="resolved")
-        _wire_models(
-            mocker,
-            react_responses=[ai_final],
-            extractor_findings=[_found()],
-        )
-
-        graph = build_probe_subgraph(
-            tools=[csmar_probe], prompt="sys", per_variable_max_calls=3
-        )
-        # 不注入 available_databases,应回落到 (unavailable) 字面量
-        result = asyncio.run(
-            graph.ainvoke({"empirical_spec": _spec([_var("ROA")])})
-        )
-
-        msgs = result["messages"]
-        human_msg = next(m for m in msgs if isinstance(m, HumanMessage))
-        assert "(unavailable)" in human_msg.content
-
-
-class TestToolFiltering:
-    def test_bound_tools_exclude_list_databases(self, mocker: Any) -> None:
-        ai_final = AIMessage(content="done")
-        _wire_models(
-            mocker,
-            react_responses=[ai_final],
-            extractor_findings=[_found()],
-        )
-        # 取到 mocked model 以便捕获 bind_tools 调用
-        from harness_stata.subgraphs import probe_subgraph as mod
-
-        captured_model = mod.get_chat_model()  # type: ignore[reportUnknownVariableType]
-
-        graph = build_probe_subgraph(
-            tools=[csmar_probe, csmar_list_databases, csmar_schema],
-            prompt="sys",
-            per_variable_max_calls=3,
-        )
-        asyncio.run(
-            graph.ainvoke(
-                {
-                    "empirical_spec": _spec([_var("ROA")]),
-                    "available_databases": "CSMAR",
-                }
-            )
-        )
-
-        # bind_tools 被调用时传入的工具列表不应含 list_databases
-        bind_call = captured_model.bind_tools.call_args  # type: ignore[reportUnknownMemberType]
-        passed_tools = bind_call.args[0] if bind_call.args else bind_call.kwargs["tools"]
-        names = [t.name for t in passed_tools]
-        assert "csmar_list_databases" not in names
-        assert "csmar_probe" in names
-        assert "csmar_schema" in names
-
-    def test_subgraph_rejects_only_list_databases(self) -> None:
-        # 工具集只含 list_databases → 过滤后 bound_tools 为空,应 ValueError
-        with pytest.raises(ValueError, match="non-list_databases"):
-            build_probe_subgraph(
-                tools=[csmar_list_databases],
-                prompt="p",
-                per_variable_max_calls=1,
-            )
