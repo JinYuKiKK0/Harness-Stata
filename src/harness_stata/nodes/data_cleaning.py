@@ -17,12 +17,13 @@ import json
 import re
 import traceback
 from pathlib import Path
-from typing import Any, TypedDict, cast
+from typing import Any, cast
 
 import pandas as pd
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool, tool  # pyright: ignore[reportUnknownVariableType]
 
+from harness_stata.nodes._writes import awrites_to
 from harness_stata.prompts import load_prompt
 from harness_stata.state import (
     DownloadedFile,
@@ -191,11 +192,8 @@ def _check_post_conditions(
     return row_count, columns, warnings
 
 
-class DataCleaningOutput(TypedDict):
-    merged_dataset: MergedDataset
-
-
-async def data_cleaning(state: WorkflowState) -> DataCleaningOutput:
+@awrites_to("merged_dataset")
+async def data_cleaning(state: WorkflowState) -> MergedDataset:
     """Merge DownloadedFiles into a single long-format CSV.
 
     Drives a generic ReAct subgraph bound to one ``run_python`` tool. The LLM
@@ -247,10 +245,9 @@ async def data_cleaning(state: WorkflowState) -> DataCleaningOutput:
         raise RuntimeError(msg)
 
     row_count, columns, warnings = _check_post_conditions(output_path, spec, primary_key)
-    merged: MergedDataset = {
+    return {
         "file_path": str(output_path),
         "row_count": row_count,
         "columns": columns,
         "warnings": warnings,
     }
-    return {"merged_dataset": merged}

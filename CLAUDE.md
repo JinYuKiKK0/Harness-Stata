@@ -29,6 +29,7 @@ harness-stata/
 │   ├── cli.py                    # typer CLI 入口
 │   ├── __main__.py               # python -m harness_stata 入口
 │   ├── nodes/                    # 主图视角下的 8 个节点
+│   │   ├── _writes.py            # @writes_to 装饰器，单切片节点返回 bare slice 的包装
 │   │   ├── requirement_analysis.py
 │   │   ├── model_construction.py
 │   │   ├── data_probe.py         # 内部调用 subgraphs/probe_subgraph 工厂

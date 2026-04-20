@@ -109,6 +109,10 @@ def check_prompts() -> list[Issue]:
 def check_node_exports() -> list[Issue]:
     issues: list[Issue] = []
     for py in _iter_py(NODES_DIR):
+        # 按 Python 惯例，下划线开头的文件是 package 内部私有助手（如 _writes.py 装饰器），
+        # 不是节点模块，跳过"必须导出同名 callable"的约定检查。
+        if py.name.startswith("_"):
+            continue
         try:
             tree = ast.parse(py.read_text(encoding="utf-8"))
         except SyntaxError as e:

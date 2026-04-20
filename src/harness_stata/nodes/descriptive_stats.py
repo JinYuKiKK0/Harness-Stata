@@ -15,11 +15,12 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, TypedDict, cast
+from typing import Any, cast
 
 from langchain_core.messages import AIMessage, HumanMessage
 
 from harness_stata.clients.stata import get_stata_tools
+from harness_stata.nodes._writes import awrites_to
 from harness_stata.prompts import load_prompt
 from harness_stata.state import (
     DescStatsReport,
@@ -116,11 +117,8 @@ def _assert_file_exists(path_str: str, role: str) -> None:
         raise RuntimeError(msg)
 
 
-class DescriptiveStatsOutput(TypedDict):
-    desc_stats_report: DescStatsReport
-
-
-async def descriptive_stats(state: WorkflowState) -> DescriptiveStatsOutput:
+@awrites_to("desc_stats_report")
+async def descriptive_stats(state: WorkflowState) -> DescStatsReport:
     """Run descriptive statistics and produce DescStatsReport.
 
     Drives a generic ReAct subgraph bound to the stata-executor MCP tools.
@@ -173,9 +171,8 @@ async def descriptive_stats(state: WorkflowState) -> DescriptiveStatsOutput:
     _assert_file_exists(do_file_path, "do_file_path")
     _assert_file_exists(log_file_path, "log_file_path")
 
-    report: DescStatsReport = {
+    return {
         "do_file_path": do_file_path,
         "log_file_path": log_file_path,
         "summary": summary,
     }
-    return {"desc_stats_report": report}

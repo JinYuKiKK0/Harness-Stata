@@ -20,12 +20,13 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypedDict, cast
+from typing import Any, cast
 
 from langchain_core.tools import BaseTool
 
 from harness_stata.clients.csmar import get_csmar_tools
 from harness_stata.config import get_settings
+from harness_stata.nodes._writes import awrites_to
 from harness_stata.state import (
     DownloadedFile,
     DownloadedFiles,
@@ -156,11 +157,8 @@ def _make_downloaded_files(task: DownloadTask, files: Sequence[str]) -> list[Dow
 # ---------------------------------------------------------------------------
 
 
-class DataDownloadOutput(TypedDict):
-    downloaded_files: DownloadedFiles
-
-
-async def data_download(state: WorkflowState) -> DataDownloadOutput:
+@awrites_to("downloaded_files")
+async def data_download(state: WorkflowState) -> DownloadedFiles:
     """Batch-download every DownloadTask and record file paths in downloaded_files."""
     err = _validate(state)
     if err is not None:
@@ -196,4 +194,4 @@ async def data_download(state: WorkflowState) -> DataDownloadOutput:
             files = _extract_file_paths(mat_result, task)
             collected.extend(_make_downloaded_files(task, files))
 
-    return {"downloaded_files": {"files": collected}}
+    return {"files": collected}

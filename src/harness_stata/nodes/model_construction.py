@@ -8,12 +8,13 @@ data-structure requirements.
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict, cast
+from typing import Literal, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from harness_stata.clients.llm import get_chat_model
+from harness_stata.nodes._writes import writes_to
 from harness_stata.prompts import load_prompt
 from harness_stata.state import EmpiricalSpec, ModelPlan, VariableDefinition, WorkflowState
 
@@ -55,11 +56,8 @@ class _ModelPlanModel(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class ModelConstructionOutput(TypedDict):
-    model_plan: ModelPlan
-
-
-def model_construction(state: WorkflowState) -> ModelConstructionOutput:
+@writes_to("model_plan")
+def model_construction(state: WorkflowState) -> ModelPlan:
     """Translate EmpiricalSpec into a structured ModelPlan."""
     spec: EmpiricalSpec = state["empirical_spec"]  # type: ignore[reportTypedDictNotRequiredAccess]
 
@@ -77,7 +75,7 @@ def model_construction(state: WorkflowState) -> ModelConstructionOutput:
     )
 
     assert isinstance(result, _ModelPlanModel)
-    return {"model_plan": cast("ModelPlan", result.model_dump())}
+    return cast("ModelPlan", result.model_dump())
 
 
 def _format_empirical_spec(spec: EmpiricalSpec) -> str:
