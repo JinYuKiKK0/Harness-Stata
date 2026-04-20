@@ -2,12 +2,20 @@
 
 ## 当前焦点
 
-F24 完成: MVP 本地 CLI 端到端链路打通。`src/harness_stata/cli.py` 以 typer 暴露 `harness-stata run --x-variable ... --data-frequency ...` 命令,驱动 F23 主图,同进程阻塞式处理 hitl interrupt,并把 RegressionResult 摘要打印到 stdout + 把终态快照落盘为 `final_state.json`。全部 25 个 feature (F01-F25) 现已 `passes=true`,MVP 可交付。
+MVP 所有 25 个 feature (F01-F25) `passes=true`,可交付。本次会话对 `langgraph dev` 调试时暴露的两个问题做了根治修复:model_construction prompt 输出占位符公式 → 改为 LaTeX 源码 + 真实变量名代入;data_probe 在 ASGI 下 `BlockingError` → generic_react / probe_subgraph 子图全链路转 async,data_probe 改走 `await subgraph.ainvoke(...)`。
 
 ## 当前上下文
 
 <!-- 每个会话覆盖此部分。保持简洁。 -->
 
+- 本次 bug fix:
+  - `src/harness_stata/prompts/model_construction.md`:删除"用 Y/X/Z 占位符, 无需替换具体变量名"条款;改写"数学方程式"小节为 LaTeX 硬约束 (`$$...$$` 包裹、`\alpha` / `\beta_1` / `\gamma_k` / `\sum_{k=1}^{n}` / `\mu_i` / `\delta_t` / `\varepsilon_{i,t}`、下标 `_{i,t}`);5 类模型示例全部重写成 LaTeX 源码,并示范 dependent/independent 变量名代入、控制变量用向量形式
+  - `src/harness_stata/nodes/model_construction.py`:`_ModelPlanModel.equation` Field description 同步加 LaTeX 硬约束,with_structured_output 会把该 description 注入 tool schema
+  - `src/harness_stata/subgraphs/generic_react.py`:`_agent` / `_tool_executor` 改 async def,`model.invoke` → `await model.ainvoke`,`tool_obj.invoke` → `await tool_obj.ainvoke`
+  - `src/harness_stata/subgraphs/probe_subgraph.py`:`_variable_react` / `_result_handler` / `_extract_finding` 改 async def,所有 LLM 与 tool 调用改用 ainvoke
+  - `src/harness_stata/nodes/data_probe.py`:`subgraph.invoke` → `await subgraph.ainvoke`;docstring 更新为 "async 全链路"
+  - 测试:`tests/subgraphs/test_generic_react.py` / `test_probe_subgraph.py` / `tests/nodes/test_data_probe.py` 的 mock 由 `MagicMock.invoke` 改为 `AsyncMock` 绑定的 `ainvoke`;子图单测调用改为 `asyncio.run(graph.ainvoke(...))` (LangGraph 同步 `.invoke()` 不允许纯 async 节点,会抛 "No synchronous function provided")
+  - 质量门禁 9/9 通过 (pytest 102 passed 保持)
 - F24 完成:
   - `src/harness_stata/cli.py` (~215 行):
     - 单命令 `run`,6 个必填 `--option` 直接映射 `UserRequest`;`data_frequency` 用 `StrEnum` 让 typer 自动做 choice 校验 (yearly/quarterly/monthly/daily)

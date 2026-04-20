@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -33,17 +34,23 @@ def echo_b(x: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _wire_model(mocker: Any, responses: list[AIMessage]) -> MagicMock:
-    """Patch get_chat_model so that .bind_tools(...).invoke(...) returns responses in order."""
+def _wire_model(mocker: Any, responses: list[AIMessage]) -> AsyncMock:
+    """Patch get_chat_model so that .bind_tools(...).ainvoke(...) returns responses in order.
+
+    Returns the AsyncMock bound to ``bind_tools(...).ainvoke`` so tests can
+    assert on call counts / args. The subgraph agent node is ``async def`` and
+    calls ``await model.ainvoke(...)``; MagicMock auto-attrs are not awaitable,
+    so we explicitly wire an AsyncMock here.
+    """
     model = MagicMock()
     bound = MagicMock()
-    bound.invoke.side_effect = responses
+    bound.ainvoke = AsyncMock(side_effect=responses)
     model.bind_tools.return_value = bound
     mocker.patch(
         "harness_stata.subgraphs.generic_react.get_chat_model",
         return_value=model,
     )
-    return bound
+    return bound.ainvoke
 
 
 def _tool_call(name: str, args: dict[str, Any], call_id: str) -> dict[str, Any]:
@@ -86,7 +93,7 @@ class TestNormalCompletion:
             "messages": [HumanMessage(content="user input")],
             "iteration_count": 0,
         }
-        result = graph.invoke(initial)
+        result = asyncio.run(graph.ainvoke(initial))
 
         # Final state ends with a tool-less AIMessage
         final_msg = result["messages"][-1]
@@ -104,7 +111,7 @@ class TestNormalCompletion:
         assert tool_msgs[0].tool_call_id == "call_1"
 
         # LLM was invoked twice (two agent turns)
-        assert bound.invoke.call_count == 2
+        assert bound.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -132,13 +139,13 @@ class TestForcedTruncation:
             "messages": [HumanMessage(content="go")],
             "iteration_count": 0,
         }
-        result = graph.invoke(initial)
+        result = asyncio.run(graph.ainvoke(initial))
 
         # Iteration counter reached the cap
         assert result["iteration_count"] == max_iter
 
         # Agent ran max_iter + 1 times (final call aborted by should_continue)
-        assert bound.invoke.call_count == max_iter + 1
+        assert bound.call_count == max_iter + 1
 
         # Final message still carries tool_calls (proves truncation, not natural end)
         final_msg = result["messages"][-1]
@@ -161,10 +168,10 @@ class TestSystemPromptInjection:
             "messages": [HumanMessage(content="hi")],
             "iteration_count": 0,
         }
-        result = graph.invoke(initial)
+        result = asyncio.run(graph.ainvoke(initial))
 
         # First message seen by the LLM is the injected SystemMessage
-        first_call_msgs: list[Any] = bound.invoke.call_args_list[0][0][0]
+        first_call_msgs: list[Any] = bound.call_args_list[0][0][0]
         assert isinstance(first_call_msgs[0], SystemMessage)
         assert first_call_msgs[0].content == "PROMPT-X"
 
@@ -198,7 +205,7 @@ class TestParallelToolCalls:
             "messages": [HumanMessage(content="go")],
             "iteration_count": 0,
         }
-        result = graph.invoke(initial)
+        result = asyncio.run(graph.ainvoke(initial))
 
         tool_msgs = [m for m in result["messages"] if isinstance(m, ToolMessage)]
         assert len(tool_msgs) == 2

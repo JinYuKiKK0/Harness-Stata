@@ -14,7 +14,7 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pytest_mock import MockerFixture
@@ -55,9 +55,12 @@ def _patch_settings(mocker: MockerFixture, per_variable_max_calls: int = 4) -> N
 
 
 def _patch_subgraph(mocker: MockerFixture, final_state: dict[str, Any]) -> MagicMock:
-    """Replace build_probe_subgraph with a factory returning a mock compiled graph."""
+    """Replace build_probe_subgraph with a factory returning a mock compiled graph.
+
+    Node now calls ``await subgraph.ainvoke(...)``; wire ``ainvoke`` as AsyncMock.
+    """
     compiled = MagicMock()
-    compiled.invoke.return_value = final_state
+    compiled.ainvoke = AsyncMock(return_value=final_state)
     factory = mocker.patch(
         "harness_stata.nodes.data_probe.build_probe_subgraph",
         return_value=compiled,
@@ -271,7 +274,7 @@ def test_data_probe_subgraph_invoke_exception_propagates(
     _patch_csmar(mocker)
     _patch_settings(mocker)
     compiled = MagicMock()
-    compiled.invoke.side_effect = RuntimeError("upstream MCP crashed")
+    compiled.ainvoke = AsyncMock(side_effect=RuntimeError("upstream MCP crashed"))
     mocker.patch(
         "harness_stata.nodes.data_probe.build_probe_subgraph",
         return_value=compiled,

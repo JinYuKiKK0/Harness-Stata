@@ -174,7 +174,7 @@ def build_probe_subgraph(
             updates["variable_queue"] = []
         return updates
 
-    def _variable_react(state: ProbeState) -> dict[str, Any]:
+    async def _variable_react(state: ProbeState) -> dict[str, Any]:
         """Run the inner ReAct loop for the current variable."""
         var = state.get("current_variable")
         if var is None:
@@ -192,7 +192,7 @@ def build_probe_subgraph(
         model = get_chat_model().bind_tools(bound_tools)  # pyright: ignore[reportUnknownMemberType]
         call_count = 0
         while True:
-            response = model.invoke(messages)  # pyright: ignore[reportUnknownMemberType]
+            response = await model.ainvoke(messages)  # pyright: ignore[reportUnknownMemberType]
             assert isinstance(response, AIMessage)
             messages.append(response)
             if not response.tool_calls:
@@ -201,12 +201,12 @@ def build_probe_subgraph(
                 break
             for call in response.tool_calls:
                 tool_obj = tools_by_name[call["name"]]
-                output = tool_obj.invoke(call["args"])  # pyright: ignore[reportUnknownMemberType]
+                output = await tool_obj.ainvoke(call["args"])  # pyright: ignore[reportUnknownMemberType]
                 messages.append(ToolMessage(content=str(output), tool_call_id=call["id"] or ""))
             call_count += 1
         return {"messages": messages, "per_variable_call_count": call_count}
 
-    def _result_handler(state: ProbeState) -> dict[str, Any]:
+    async def _result_handler(state: ProbeState) -> dict[str, Any]:
         """Interpret the react trace; route Hard/Soft and update report/manifest."""
         report = _ensure_report(state.get("probe_report"))
         manifest = _ensure_manifest(state.get("download_manifest"))
@@ -219,7 +219,7 @@ def build_probe_subgraph(
             return {"probe_report": report, "download_manifest": manifest}
 
         messages = state.get("messages") or []
-        finding = _extract_finding(messages, current)
+        finding = await _extract_finding(messages, current)
 
         is_substitute_task = current["name"] in sub_meta
 
@@ -306,7 +306,7 @@ def build_probe_subgraph(
 # ---------------------------------------------------------------------------
 
 
-def _extract_finding(
+async def _extract_finding(
     messages: list[BaseMessage], variable: VariableDefinition
 ) -> _VariableProbeFindingModel:
     """Run a structured-output extraction over the react trace."""
@@ -316,7 +316,7 @@ def _extract_finding(
         f"Agent exploration trace:\n{_format_trace(messages)}"
     )
     structured = get_chat_model().with_structured_output(_VariableProbeFindingModel)  # pyright: ignore[reportUnknownMemberType]
-    result = structured.invoke(  # pyright: ignore[reportUnknownMemberType]
+    result = await structured.ainvoke(  # pyright: ignore[reportUnknownMemberType]
         [SystemMessage(content=_EXTRACTOR_PROMPT), HumanMessage(content=user_msg)]
     )
     assert isinstance(result, _VariableProbeFindingModel)

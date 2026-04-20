@@ -31,14 +31,33 @@
 
 ## 数学方程式（`equation`）
 
-- 使用标准数学符号：`α`（截距）、`β`（核心与控制系数，核心 X 的系数记为 `β₁`）、`γ`（控制变量系数向量）、`μ_i`（个体固定效应）、`λ_t`（时间固定效应）、`ε_it`（误差项）
-- 示例：
-  - 双向固定效应：`Y_it = α + β₁X_it + γ'Z_it + μ_i + λ_t + ε_it`
-  - 单向固定效应（个体）：`Y_it = α + β₁X_it + γ'Z_it + μ_i + ε_it`
-  - OLS 截面：`Y_i = α + β₁X_i + γ'Z_i + ε_i`
-  - Logit：`logit(P(Y_it = 1)) = α + β₁X_it + γ'Z_it`
-  - 时间序列：`Y_t = α + β₁X_t + γ'Z_t + ε_t`
-- 用 `Y`、`X`、`Z` 作为占位符指代被解释变量、核心解释变量与控制变量向量；无需替换为具体变量名
+**输出必须是 LaTeX 源码**，且严格遵守以下规则：
+
+### 格式硬约束
+
+- 整条公式用 `$$...$$` 包裹（行间公式）
+- 所有符号使用 LaTeX 源码（反斜杠命令），禁止使用 Unicode 字形：
+  - 截距：`\alpha`
+  - 核心解释变量系数：`\beta_1`
+  - 控制变量系数：`\gamma_k`（带求和号的向量形式）
+  - 个体固定效应：`\mu_i`
+  - 时间固定效应：`\delta_t`
+  - 误差项：`\varepsilon_{i,t}`（或 `_{i}` / `_{t}`，按下标维度调整）
+- 下标用大括号包裹：`X_{i,t}` 而非 `X_it`；跨两维时必须写成 `_{i,t}`
+
+### 变量代入规则（禁止使用占位符 Y/X/Z）
+
+- 被解释变量位置 **必须**填 `variables` 中 `role="dependent"` 的那个变量的 `name`
+- 核心解释变量位置 **必须**填 `variables` 中 `role="independent"` 的那个变量的 `name`
+- 控制变量作为向量 `Controls_{k,i,t}` 并用 `\sum_{k=1}^{n} \gamma_k Controls_{k,i,t}` 求和形式写出；不要在方程中列举每一个控制变量的名字
+
+### 5 类模型的标准写法（以 dependent=`ROA`, independent=`Leverage` 示范；实际用真实变量名代入）
+
+- 双向固定效应：`$$ROA_{i,t} = \alpha + \beta_1 Leverage_{i,t} + \sum_{k=1}^{n} \gamma_k Controls_{k,i,t} + \mu_i + \delta_t + \varepsilon_{i,t}$$`
+- 单向固定效应（个体）：`$$ROA_{i,t} = \alpha + \beta_1 Leverage_{i,t} + \sum_{k=1}^{n} \gamma_k Controls_{k,i,t} + \mu_i + \varepsilon_{i,t}$$`
+- OLS 截面：`$$ROA_{i} = \alpha + \beta_1 Leverage_{i} + \sum_{k=1}^{n} \gamma_k Controls_{k,i} + \varepsilon_{i}$$`
+- Logit：`$$\text{logit}(P(ROA_{i,t}=1)) = \alpha + \beta_1 Leverage_{i,t} + \sum_{k=1}^{n} \gamma_k Controls_{k,i,t}$$`
+- 时间序列：`$$ROA_{t} = \alpha + \beta_1 Leverage_{t} + \sum_{k=1}^{n} \gamma_k Controls_{k,t} + \varepsilon_{t}$$`
 
 ## 核心假设（`core_hypothesis`）
 

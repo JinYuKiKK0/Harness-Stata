@@ -57,7 +57,7 @@ def build_react_subgraph(
     tools_by_name: dict[str, BaseTool] = {t.name: t for t in tools}
     bound_tools: list[BaseTool] = list(tools)
 
-    def _agent(state: ReactState) -> dict[str, list[BaseMessage]]:
+    async def _agent(state: ReactState) -> dict[str, list[BaseMessage]]:
         msgs = list(state["messages"])
         new_messages: list[BaseMessage] = []
         if not msgs or not isinstance(msgs[0], SystemMessage):
@@ -65,18 +65,18 @@ def build_react_subgraph(
             msgs = [sys_msg, *msgs]
             new_messages.append(sys_msg)
         model = get_chat_model().bind_tools(bound_tools)  # pyright: ignore[reportUnknownMemberType]
-        response = model.invoke(msgs)  # pyright: ignore[reportUnknownMemberType]
+        response = await model.ainvoke(msgs)  # pyright: ignore[reportUnknownMemberType]
         assert isinstance(response, AIMessage)
         new_messages.append(response)
         return {"messages": new_messages}
 
-    def _tool_executor(state: ReactState) -> dict[str, Any]:
+    async def _tool_executor(state: ReactState) -> dict[str, Any]:
         last = state["messages"][-1]
         assert isinstance(last, AIMessage)
         tool_msgs: list[BaseMessage] = []
         for call in last.tool_calls:
             tool_obj = tools_by_name[call["name"]]
-            output = tool_obj.invoke(call["args"])  # pyright: ignore[reportUnknownMemberType]
+            output = await tool_obj.ainvoke(call["args"])  # pyright: ignore[reportUnknownMemberType]
             tool_msgs.append(ToolMessage(content=str(output), tool_call_id=call["id"] or ""))
         return {"messages": tool_msgs, "iteration_count": 1}
 

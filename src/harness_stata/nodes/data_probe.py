@@ -4,8 +4,9 @@ Pure-code wrapper around :func:`build_probe_subgraph`. Binds csmar-mcp tools via
 ``get_csmar_tools()`` (async contextmanager) and maps ``WorkflowState`` into the
 subgraph's ``ProbeState``, then lifts the subgraph's final state back out.
 
-Node is ``async def`` (csmar tools contextmanager is async) but the compiled
-subgraph is invoked synchronously — its inner ReAct loop is hand-written sync.
+Node and the inner ReAct loop are fully async: the compiled subgraph is invoked
+via ``await subgraph.ainvoke(...)`` so MCP stdio IO never blocks the event loop
+(required by ``langgraph dev`` blockbuster detection and LangGraph deployments).
 
 Hard failure is not raised at this layer. When the subgraph flips
 ``workflow_status`` to ``"failed_hard_contract"``, the node simply passes it
@@ -77,7 +78,7 @@ async def data_probe(state: WorkflowState) -> DataProbeOutput:
             "empirical_spec": spec,
             "model_plan": model_plan,
         }
-        raw_final = subgraph.invoke(initial)  # pyright: ignore[reportUnknownMemberType]
+        raw_final = await subgraph.ainvoke(initial)  # pyright: ignore[reportUnknownMemberType]
         final = cast("ProbeState", raw_final)
 
     result: DataProbeOutput = {

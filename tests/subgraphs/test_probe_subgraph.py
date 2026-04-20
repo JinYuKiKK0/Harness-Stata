@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -43,21 +44,26 @@ def _wire_models(
     *,
     react_responses: list[AIMessage] | None = None,
     extractor_findings: list[_VariableProbeFindingModel] | None = None,
-) -> tuple[MagicMock, MagicMock]:
-    """Patch get_chat_model so .bind_tools(...).invoke and .with_structured_output(...).invoke
-    return canned responses in order. Returns the (bound_react_mock, structured_extractor_mock)."""
+) -> tuple[AsyncMock, AsyncMock]:
+    """Patch get_chat_model so .bind_tools(...).ainvoke and .with_structured_output(...).ainvoke
+    return canned responses in order. Returns (bound_react_ainvoke, extractor_ainvoke).
+
+    Subgraph nodes are ``async def`` and use ``await model.ainvoke(...)`` /
+    ``await structured.ainvoke(...)``; MagicMock auto-attrs are not awaitable,
+    so we wire AsyncMock explicitly.
+    """
     model = MagicMock()
     bound = MagicMock()
-    bound.invoke.side_effect = react_responses or []
+    bound.ainvoke = AsyncMock(side_effect=react_responses or [])
     model.bind_tools.return_value = bound
     structured = MagicMock()
-    structured.invoke.side_effect = extractor_findings or []
+    structured.ainvoke = AsyncMock(side_effect=extractor_findings or [])
     model.with_structured_output.return_value = structured
     mocker.patch(
         "harness_stata.subgraphs.probe_subgraph.get_chat_model",
         return_value=model,
     )
-    return bound, structured
+    return bound.ainvoke, structured.ainvoke
 
 
 def _tool_call(name: str, args: dict[str, Any], call_id: str) -> dict[str, Any]:
@@ -147,11 +153,11 @@ class TestEmptyQueue:
             tools=[csmar_probe], prompt="sys", per_variable_max_calls=3
         )
         initial: ProbeState = {"empirical_spec": _spec([])}
-        result = graph.invoke(initial)
+        result = asyncio.run(graph.ainvoke(initial))
 
         # Neither react nor extractor was called
-        assert bound.invoke.call_count == 0
-        assert structured.invoke.call_count == 0
+        assert bound.call_count == 0
+        assert structured.call_count == 0
 
         # Dispatcher initialised but left queue empty, current_variable cleared
         assert result["queue_initialized"] is True
@@ -187,10 +193,10 @@ class TestSingleVariableNaturalCompletion:
             per_variable_max_calls=3,
         )
         initial: ProbeState = {"empirical_spec": _spec([_var("ROA")])}
-        result = graph.invoke(initial)
+        result = asyncio.run(graph.ainvoke(initial))
 
         # Exactly one LLM call, zero tool rounds consumed
-        assert bound.invoke.call_count == 1
+        assert bound.call_count == 1
         assert result["per_variable_call_count"] == 0
 
         # Messages contain the injected SystemMessage and the LLM response
@@ -232,13 +238,13 @@ class TestSingleVariableBudgetExhaustion:
             tools=[csmar_probe], prompt="sys", per_variable_max_calls=budget
         )
         initial: ProbeState = {"empirical_spec": _spec([_var("SIZE")])}
-        result = graph.invoke(initial)
+        result = asyncio.run(graph.ainvoke(initial))
 
         # Counter reached the cap; tools executed exactly ``budget`` times
         assert result["per_variable_call_count"] == budget
         # LLM called budget + 1 times: the final call produced tool_calls that
         # were rejected by the budget guard instead of executed
-        assert bound.invoke.call_count == budget + 1
+        assert bound.call_count == budget + 1
 
         # Final AIMessage still carries tool_calls (proves truncation, not natural end)
         final_msg = result["messages"][-1]
@@ -281,10 +287,10 @@ class TestTwoVariables:
         initial: ProbeState = {
             "empirical_spec": _spec([_var("V1"), _var("V2")]),
         }
-        result = graph.invoke(initial)
+        result = asyncio.run(graph.ainvoke(initial))
 
         # Four total LLM invocations across both variables
-        assert bound.invoke.call_count == 4
+        assert bound.call_count == 4
 
         # Counter reflects variable 2's run only (dispatcher reset it to 0)
         assert result["per_variable_call_count"] == 0
@@ -318,7 +324,7 @@ class TestFoundSingleVariable:
         graph = build_probe_subgraph(
             tools=[csmar_probe], prompt="p", per_variable_max_calls=3
         )
-        result = graph.invoke({"empirical_spec": _spec([_var("ROA")])})
+        result = asyncio.run(graph.ainvoke({"empirical_spec": _spec([_var("ROA")])}))
 
         report = result["probe_report"]
         assert report["overall_status"] == "success"
@@ -352,8 +358,10 @@ class TestHardNotFound:
         graph = build_probe_subgraph(
             tools=[csmar_probe], prompt="p", per_variable_max_calls=3
         )
-        result = graph.invoke(
-            {"empirical_spec": _spec([_var("ROA", contract="hard"), _var("LEV")])}
+        result = asyncio.run(
+            graph.ainvoke(
+                {"empirical_spec": _spec([_var("ROA", contract="hard"), _var("LEV")])}
+            )
         )
 
         report = result["probe_report"]
@@ -391,7 +399,7 @@ class TestSoftSubstituteSuccess:
             tools=[csmar_probe], prompt="p", per_variable_max_calls=3
         )
         roe = _var("ROE", role="control", contract="soft")
-        result = graph.invoke({"empirical_spec": _spec([roe])})
+        result = asyncio.run(graph.ainvoke({"empirical_spec": _spec([roe])}))
 
         report = result["probe_report"]
         assert report["overall_status"] == "success"
@@ -438,7 +446,7 @@ class TestSoftSubstituteFailure:
             tools=[csmar_probe], prompt="p", per_variable_max_calls=3
         )
         roe = _var("ROE", role="control", contract="soft")
-        result = graph.invoke({"empirical_spec": _spec([roe])})
+        result = asyncio.run(graph.ainvoke({"empirical_spec": _spec([roe])}))
 
         report = result["probe_report"]
         # Substitute itself failed: status=not_found, recorded under ORIGINAL name
@@ -451,8 +459,8 @@ class TestSoftSubstituteFailure:
         assert "workflow_status" not in result
 
         # Exactly two react/extractor rounds — no third substitute generation
-        assert bound.invoke.call_count == 2
-        assert structured.invoke.call_count == 2
+        assert bound.call_count == 2
+        assert structured.call_count == 2
         # Empty manifest since nothing was found
         assert result["download_manifest"]["items"] == []
 
@@ -472,8 +480,10 @@ class TestMultiVariableSameTable:
         graph = build_probe_subgraph(
             tools=[csmar_probe], prompt="p", per_variable_max_calls=3
         )
-        result = graph.invoke(
-            {"empirical_spec": _spec([_var("ROA"), _var("LEV", role="control")])}
+        result = asyncio.run(
+            graph.ainvoke(
+                {"empirical_spec": _spec([_var("ROA"), _var("LEV", role="control")])}
+            )
         )
 
         items = result["download_manifest"]["items"]

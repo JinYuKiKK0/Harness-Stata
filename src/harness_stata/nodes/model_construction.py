@@ -43,7 +43,13 @@ class _ModelPlanModel(BaseModel):
         )
     )
     equation: str = Field(
-        description="数学方程式字符串, 使用标准计量经济学数学符号, 具体格式见 system prompt"
+        description=(
+            "LaTeX 源码字符串, 外层用 $$...$$ 包裹; 变量名必须从 variables 代入 "
+            "(dependent->被解释变量位置, independent->核心解释变量位置, "
+            "控制变量用 \\sum_{k=1}^{n} \\gamma_k Controls_{k,i,t} 向量形式); "
+            "使用 \\alpha / \\beta_1 / \\gamma_k / \\mu_i / \\delta_t / \\varepsilon_{i,t} 等 LaTeX 命令, "
+            "禁止 Unicode 字形; 具体示例见 system prompt"
+        )
     )
     core_hypothesis: _CoreHypothesisModel
     data_structure_requirements: list[str] = Field(
