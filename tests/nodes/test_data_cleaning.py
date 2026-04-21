@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -11,52 +10,61 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pandas as pd
 import pytest
-from langchain_core.messages import AIMessage
+from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 from langchain_core.tools import BaseTool
 from pytest_mock import MockerFixture
 
-from harness_stata.nodes.data_cleaning import data_cleaning
+from harness_stata.nodes.data_cleaning import _CleaningOutput, data_cleaning
 from harness_stata.state import DownloadedFile, EmpiricalSpec, WorkflowState
-
 
 # ---------------------------------------------------------------------------
 # Test helpers
 # ---------------------------------------------------------------------------
 
 
-def _patch_subgraph(
+def _patch_agent(
     mocker: MockerFixture,
     *,
     sqls: Sequence[str] = (),
-    final_content: str,
-    tool_calls: list[dict[str, Any]] | None = None,
+    final_view: str = "merged",
+    primary_key: Sequence[str] = ("stkcd", "year"),
+    raise_truncation: bool = False,
 ) -> None:
-    """Patch build_react_subgraph to execute ``sqls`` then return ``final_content``.
+    """Patch ``create_agent`` in the data_cleaning module.
 
-    The fake subgraph exercises the real ``run_sql`` tool (so final_view
-    checks and intermediate-artifact dumps see a real DuckDB connection).
+    The fake agent executes ``sqls`` via the real ``run_sql`` tool (so
+    ``_check_final_view_exists`` and intermediate-artifact dumps see a real
+    DuckDB connection), then returns a structured ``_CleaningOutput`` via
+    ``result["structured_response"]``.
     """
+    payload = _CleaningOutput(final_view=final_view, primary_key=list(primary_key))
 
-    def _fake_build(
-        tools: Sequence[BaseTool], prompt: str, max_iterations: int
+    def _fake_create(
+        *,
+        model: Any,
+        tools: Sequence[BaseTool],
+        system_prompt: str,
+        middleware: Any,
+        response_format: Any,
     ) -> MagicMock:
-        del prompt, max_iterations  # unused in fake
+        del model, system_prompt, middleware, response_format
         assert len(tools) == 1, "data_cleaning binds exactly one run_sql tool"
         sql_tool = tools[0]
 
-        async def _ainvoke(_initial: dict[str, Any]) -> dict[str, Any]:
+        async def _ainvoke(_state: dict[str, Any]) -> dict[str, Any]:
+            if raise_truncation:
+                raise ModelCallLimitExceededError(1, 1, None, 1)
             for q in sqls:
                 await sql_tool.ainvoke({"query": q})
-            final_msg = AIMessage(content=final_content, tool_calls=tool_calls or [])
-            return {"messages": [final_msg], "iteration_count": 1}
+            return {"messages": [], "structured_response": payload}
 
         fake = MagicMock()
         fake.ainvoke = AsyncMock(side_effect=_ainvoke)
         return fake
 
     mocker.patch(
-        "harness_stata.nodes.data_cleaning.build_react_subgraph",
-        side_effect=_fake_build,
+        "harness_stata.nodes.data_cleaning.create_agent",
+        side_effect=_fake_create,
     )
 
 
@@ -121,12 +129,11 @@ def test_data_cleaning_success_single_table(
 ) -> None:
     session_dir, task_dir = _make_session_layout(tmp_path)
     src = _write_panel_csv(task_dir, "data.csv", _default_rows())
-    _patch_subgraph(
+    _patch_agent(
         mocker,
         sqls=["CREATE VIEW merged AS SELECT * FROM src_FS_COMBAS"],
-        final_content=json.dumps(
-            {"final_view": "merged", "primary_key": ["stkcd", "year"]}
-        ),
+        final_view="merged",
+        primary_key=("stkcd", "year"),
     )
 
     state = _base_state(make_empirical_spec(), [_make_downloaded_file(src)])
@@ -168,7 +175,7 @@ def test_data_cleaning_success_multi_source_files(
             {"stkcd": 3, "year": 2020, "digital": 0.7},
         ],
     )
-    _patch_subgraph(
+    _patch_agent(
         mocker,
         sqls=[
             (
@@ -177,9 +184,6 @@ def test_data_cleaning_success_multi_source_files(
                 "FROM src_FS_COMBAS a JOIN src_DIG_TRANSFORM b USING (stkcd, year)"
             )
         ],
-        final_content=json.dumps(
-            {"final_view": "merged", "primary_key": ["stkcd", "year"]}
-        ),
     )
 
     files = [
@@ -202,7 +206,7 @@ def test_data_cleaning_dumps_intermediate_views_including_failures(
     earlier failed attempts."""
     session_dir, task_dir = _make_session_layout(tmp_path)
     src = _write_panel_csv(task_dir, "data.csv", _default_rows())
-    _patch_subgraph(
+    _patch_agent(
         mocker,
         sqls=[
             # a "tmp" view the LLM tried first and didn't drop
@@ -210,9 +214,6 @@ def test_data_cleaning_dumps_intermediate_views_including_failures(
             "CREATE VIEW clean_combas AS SELECT * FROM src_FS_COMBAS",
             "CREATE VIEW merged AS SELECT * FROM clean_combas",
         ],
-        final_content=json.dumps(
-            {"final_view": "merged", "primary_key": ["stkcd", "year"]}
-        ),
     )
 
     state = _base_state(make_empirical_spec(), [_make_downloaded_file(src)])
@@ -244,12 +245,9 @@ def test_data_cleaning_coverage_and_missing_column_warn(
             {"stkcd": 4, "year": 2021, "roa": None, "digital": 0.8},
         ],
     )
-    _patch_subgraph(
+    _patch_agent(
         mocker,
         sqls=["CREATE VIEW merged AS SELECT * FROM src_FS_COMBAS"],
-        final_content=json.dumps(
-            {"final_view": "merged", "primary_key": ["stkcd", "year"]}
-        ),
     )
 
     state = _base_state(make_empirical_spec(), [_make_downloaded_file(src)])
@@ -282,12 +280,9 @@ def test_data_cleaning_duplicate_primary_key_raises(
             {"stkcd": 2, "year": 2021, "roa": 0.3},
         ],
     )
-    _patch_subgraph(
+    _patch_agent(
         mocker,
         sqls=["CREATE VIEW merged AS SELECT * FROM src_FS_COMBAS"],
-        final_content=json.dumps(
-            {"final_view": "merged", "primary_key": ["stkcd", "year"]}
-        ),
     )
 
     state = _base_state(make_empirical_spec(), [_make_downloaded_file(src)])
@@ -303,12 +298,10 @@ def test_data_cleaning_final_view_missing_raises(
     """LLM declares a final_view that was never created -> RuntimeError."""
     _, task_dir = _make_session_layout(tmp_path)
     src = _write_panel_csv(task_dir, "data.csv", _default_rows())
-    _patch_subgraph(
+    _patch_agent(
         mocker,
         sqls=["CREATE VIEW clean_combas AS SELECT * FROM src_FS_COMBAS"],
-        final_content=json.dumps(
-            {"final_view": "nonexistent_view", "primary_key": ["stkcd", "year"]}
-        ),
+        final_view="nonexistent_view",
     )
 
     state = _base_state(make_empirical_spec(), [_make_downloaded_file(src)])
@@ -324,12 +317,10 @@ def test_data_cleaning_final_view_illegal_identifier_raises(
     """Non-identifier final_view name -> RuntimeError (defense against injection)."""
     _, task_dir = _make_session_layout(tmp_path)
     src = _write_panel_csv(task_dir, "data.csv", _default_rows())
-    _patch_subgraph(
+    _patch_agent(
         mocker,
         sqls=["CREATE VIEW merged AS SELECT * FROM src_FS_COMBAS"],
-        final_content=json.dumps(
-            {"final_view": "merged; DROP TABLE x", "primary_key": ["stkcd", "year"]}
-        ),
+        final_view="merged; DROP TABLE x",
     )
     state = _base_state(make_empirical_spec(), [_make_downloaded_file(src)])
     with pytest.raises(RuntimeError, match="legal SQL identifier"):
@@ -341,22 +332,10 @@ def test_data_cleaning_react_truncation_raises(
     tmp_path: Path,
     make_empirical_spec: Callable[..., EmpiricalSpec],
 ) -> None:
-    """Final AIMessage with non-empty tool_calls = max_iterations hit."""
+    """ModelCallLimitExceededError from create_agent is translated to RuntimeError."""
     _, task_dir = _make_session_layout(tmp_path)
     src = _write_panel_csv(task_dir, "data.csv", _default_rows())
-    _patch_subgraph(
-        mocker,
-        sqls=(),
-        final_content="",
-        tool_calls=[
-            {
-                "name": "run_sql",
-                "args": {"query": "SELECT 1"},
-                "id": "call_1",
-                "type": "tool_call",
-            }
-        ],
-    )
+    _patch_agent(mocker, raise_truncation=True)
 
     state = _base_state(make_empirical_spec(), [_make_downloaded_file(src)])
     with pytest.raises(RuntimeError, match="max_iterations"):
@@ -371,7 +350,7 @@ def test_data_cleaning_illegal_source_table_raises(
     """source_table with non-identifier characters -> RuntimeError before LLM runs."""
     _, task_dir = _make_session_layout(tmp_path)
     src = _write_panel_csv(task_dir, "data.csv", _default_rows())
-    # No need to patch subgraph: failure happens during _register_sources.
+    # No need to patch agent: failure happens during _register_sources.
     file_ = _make_downloaded_file(src, source_table="FS; DROP TABLE x")
     state = _base_state(make_empirical_spec(), [file_])
     with pytest.raises(RuntimeError, match="illegal source_table"):

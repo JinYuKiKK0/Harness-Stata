@@ -7,7 +7,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
 from harness_stata.state import EmpiricalSpec, VariableDefinition
@@ -39,35 +39,39 @@ def csmar_schema(table: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _wire_models(
+def _wire_agent(
     mocker: Any,
-    *,
-    react_responses: list[AIMessage] | None = None,
-    extractor_findings: list[_VariableProbeFindingModel] | None = None,
-) -> tuple[AsyncMock, AsyncMock]:
-    """Patch get_chat_model so .bind_tools(...).ainvoke and .with_structured_output(...).ainvoke
-    return canned responses in order. Returns (bound_react_ainvoke, extractor_ainvoke).
+    findings: list[_VariableProbeFindingModel],
+) -> tuple[MagicMock, list[dict[str, Any]]]:
+    """Patch ``create_agent`` in probe_subgraph.
 
-    Subgraph nodes are ``async def`` and use ``await model.ainvoke(...)`` /
-    ``await structured.ainvoke(...)``; MagicMock auto-attrs are not awaitable,
-    so we wire AsyncMock explicitly.
+    Each call to ``create_agent`` consumes the next finding from the list and
+    returns a fake agent whose ``ainvoke`` echoes the input messages back plus
+    the finding as ``structured_response``.
+
+    Returns ``(mock_create_agent, captured_ainvoke_args)`` where
+    ``captured_ainvoke_args`` accumulates every dict passed to ``agent.ainvoke``.
     """
-    model = MagicMock()
-    bound = MagicMock()
-    bound.ainvoke = AsyncMock(side_effect=react_responses or [])
-    model.bind_tools.return_value = bound
-    structured = MagicMock()
-    structured.ainvoke = AsyncMock(side_effect=extractor_findings or [])
-    model.with_structured_output.return_value = structured
-    mocker.patch(
-        "harness_stata.subgraphs.probe_subgraph.get_chat_model",
-        return_value=model,
+    captured: list[dict[str, Any]] = []
+
+    def _make_agent(finding: _VariableProbeFindingModel) -> MagicMock:
+        agent = MagicMock()
+
+        async def _ainvoke(state: dict[str, Any]) -> dict[str, Any]:
+            captured.append(state)
+            return {
+                "messages": list(state.get("messages", [])),
+                "structured_response": finding,
+            }
+
+        agent.ainvoke = AsyncMock(side_effect=_ainvoke)
+        return agent
+
+    mock_create = mocker.patch(
+        "harness_stata.subgraphs.probe_subgraph.create_agent",
+        side_effect=[_make_agent(f) for f in findings],
     )
-    return bound.ainvoke, structured.ainvoke
-
-
-def _tool_call(name: str, args: dict[str, Any], call_id: str) -> dict[str, Any]:
-    return {"name": name, "args": args, "id": call_id, "type": "tool_call"}
+    return mock_create, captured
 
 
 def _var(name: str, role: str = "independent", contract: str = "hard") -> VariableDefinition:
@@ -147,19 +151,14 @@ class TestInputValidation:
 
 class TestEmptyQueue:
     def test_empty_variables_list_skips_llm(self, mocker: Any) -> None:
-        bound, structured = _wire_models(mocker)
+        mock_create, _ = _wire_agent(mocker, findings=[])
 
         graph = build_probe_subgraph(
             tools=[csmar_probe], prompt="sys", per_variable_max_calls=3
         )
-        initial: ProbeState = {"empirical_spec": _spec([])}
-        result = asyncio.run(graph.ainvoke(initial))
+        result = asyncio.run(graph.ainvoke({"empirical_spec": _spec([])}))
 
-        # Neither react nor extractor was called
-        assert bound.call_count == 0
-        assert structured.call_count == 0
-
-        # Dispatcher initialised but left queue empty, current_variable cleared
+        assert mock_create.call_count == 0
         assert result["queue_initialized"] is True
         assert result["variable_queue"] == []
         assert result["current_variable"] is None
@@ -174,138 +173,87 @@ class TestEmptyQueue:
 
 
 # ---------------------------------------------------------------------------
-# Single variable: natural completion (LLM emits no tool_calls on first turn)
+# Single variable: create_agent called once with correct prompt and variable
 # ---------------------------------------------------------------------------
 
 
 class TestSingleVariableNaturalCompletion:
-    def test_no_tools_on_first_turn(self, mocker: Any) -> None:
-        ai_final = AIMessage(content="variable resolved: CSMAR.TRD.ROA")
-        bound, _ = _wire_models(
-            mocker,
-            react_responses=[ai_final],
-            extractor_findings=[_found()],
-        )
+    def test_agent_receives_correct_prompt_and_variable(self, mocker: Any) -> None:
+        mock_create, captured = _wire_agent(mocker, findings=[_found()])
 
         graph = build_probe_subgraph(
             tools=[csmar_probe, csmar_schema],
             prompt="SYS-PROBE",
             per_variable_max_calls=3,
         )
-        initial: ProbeState = {"empirical_spec": _spec([_var("ROA")])}
-        result = asyncio.run(graph.ainvoke(initial))
+        result = asyncio.run(graph.ainvoke({"empirical_spec": _spec([_var("ROA")])}))
 
-        # Exactly one LLM call, zero tool rounds consumed
-        assert bound.call_count == 1
-        assert result["per_variable_call_count"] == 0
+        # Exactly one agent created
+        assert mock_create.call_count == 1
 
-        # Messages contain the injected SystemMessage and the LLM response
-        msgs = result["messages"]
-        assert isinstance(msgs[0], SystemMessage)
-        assert msgs[0].content == "SYS-PROBE"
-        assert isinstance(msgs[1], HumanMessage)
-        assert "ROA" in msgs[1].content
-        assert isinstance(msgs[-1], AIMessage)
-        assert not msgs[-1].tool_calls
+        # system_prompt passed to create_agent contains the user-supplied prompt
+        call_kwargs = mock_create.call_args[1]
+        assert "SYS-PROBE" in call_kwargs.get("system_prompt", "")
 
-        # Queue drained, graph exited cleanly
+        # ainvoke received a HumanMessage about ROA
+        assert len(captured) == 1
+        msgs = captured[0]["messages"]
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], HumanMessage)
+        assert "ROA" in msgs[0].content
+
+        # Queue drained
         assert result["variable_queue"] == []
 
 
 # ---------------------------------------------------------------------------
-# Single variable: budget exhaustion (LLM always requests tools)
+# Single variable: budget exhausted -> treated as not_found by result_handler
 # ---------------------------------------------------------------------------
 
 
 class TestSingleVariableBudgetExhaustion:
-    def test_truncates_at_per_variable_max_calls(self, mocker: Any) -> None:
-        def _ai(idx: int) -> AIMessage:
-            return AIMessage(
-                content="",
-                tool_calls=[_tool_call("csmar_probe", {"table": f"t{idx}"}, f"c{idx}")],
-            )
-
-        budget = 2
-        # Need at least budget + 1 responses: loop invokes LLM once more than it executes tools
-        responses = [_ai(i) for i in range(budget + 5)]
-        bound, _ = _wire_models(
-            mocker,
-            react_responses=responses,
-            extractor_findings=[_not_found()],  # extractor sees no clear conclusion
-        )
+    def test_budget_exhausted_treated_as_not_found(self, mocker: Any) -> None:
+        """ToolCallLimitMiddleware exhausts the per-variable budget; the outer
+        subgraph treats a missing/not_found finding as not_found for soft variables."""
+        mock_create, _ = _wire_agent(mocker, findings=[_not_found()])
 
         graph = build_probe_subgraph(
-            tools=[csmar_probe], prompt="sys", per_variable_max_calls=budget
+            tools=[csmar_probe], prompt="sys", per_variable_max_calls=2
         )
-        initial: ProbeState = {"empirical_spec": _spec([_var("SIZE")])}
-        result = asyncio.run(graph.ainvoke(initial))
+        result = asyncio.run(graph.ainvoke({"empirical_spec": _spec([_var("SIZE")])}))
 
-        # Counter reached the cap; tools executed exactly ``budget`` times
-        assert result["per_variable_call_count"] == budget
-        # LLM called budget + 1 times: the final call produced tool_calls that
-        # were rejected by the budget guard instead of executed
-        assert bound.call_count == budget + 1
-
-        # Final AIMessage still carries tool_calls (proves truncation, not natural end)
-        final_msg = result["messages"][-1]
-        assert isinstance(final_msg, AIMessage)
-        assert final_msg.tool_calls
+        assert mock_create.call_count == 1
+        vr = result["probe_report"]["variable_results"][0]
+        assert vr["variable_name"] == "SIZE"
+        assert vr["status"] == "not_found"
 
 
 # ---------------------------------------------------------------------------
-# Two variables: dispatcher cycles back, per-variable counter resets between them
+# Two variables: create_agent recreated per variable; HumanMessage has correct content
 # ---------------------------------------------------------------------------
 
 
 class TestTwoVariables:
-    def test_budget_and_messages_reset_between_variables(self, mocker: Any) -> None:
-        # Variable 1: two tool rounds, then natural completion
-        v1_tool_a = AIMessage(
-            content="",
-            tool_calls=[_tool_call("csmar_probe", {"table": "v1_a"}, "c_v1_a")],
-        )
-        v1_tool_b = AIMessage(
-            content="",
-            tool_calls=[_tool_call("csmar_probe", {"table": "v1_b"}, "c_v1_b")],
-        )
-        v1_final = AIMessage(content="v1 resolved")
-        # Variable 2: immediate natural completion
-        v2_final = AIMessage(content="v2 resolved")
-
-        bound, _ = _wire_models(
-            mocker,
-            react_responses=[v1_tool_a, v1_tool_b, v1_final, v2_final],
-            extractor_findings=[
-                _found(field="V1"),
-                _found(field="V2"),
-            ],
+    def test_agent_recreated_and_humamessage_scoped_per_variable(self, mocker: Any) -> None:
+        mock_create, captured = _wire_agent(
+            mocker, findings=[_found(field="V1"), _found(field="V2")]
         )
 
         graph = build_probe_subgraph(
             tools=[csmar_probe], prompt="sys", per_variable_max_calls=5
         )
-        initial: ProbeState = {
-            "empirical_spec": _spec([_var("V1"), _var("V2")]),
-        }
-        result = asyncio.run(graph.ainvoke(initial))
+        result = asyncio.run(
+            graph.ainvoke({"empirical_spec": _spec([_var("V1"), _var("V2")])})
+        )
 
-        # Four total LLM invocations across both variables
-        assert bound.call_count == 4
+        # create_agent called once per variable
+        assert mock_create.call_count == 2
 
-        # Counter reflects variable 2's run only (dispatcher reset it to 0)
-        assert result["per_variable_call_count"] == 0
+        # Each ainvoke got the right variable in its HumanMessage
+        assert "V1" in captured[0]["messages"][0].content
+        assert "V2" in captured[1]["messages"][0].content
 
-        # messages holds variable 2's transcript only (dispatcher cleared on reentry).
-        # Expect exactly 3 messages: System, Human, AIMessage(no tools).
-        msgs = result["messages"]
-        assert len(msgs) == 3
-        assert isinstance(msgs[0], SystemMessage)
-        assert isinstance(msgs[1], HumanMessage)
-        assert "V2" in msgs[1].content
-        assert isinstance(msgs[2], AIMessage)
-        assert msgs[2].content == "v2 resolved"
-
-        # Queue drained
+        # Queue drained; current_variable is the last processed
         assert result["variable_queue"] == []
         assert result["current_variable"] == _var("V2")
 
@@ -317,9 +265,8 @@ class TestTwoVariables:
 
 class TestFoundSingleVariable:
     def test_found_writes_manifest_and_report(self, mocker: Any) -> None:
-        ai_final = AIMessage(content="found at CSMAR.TRD.ROA")
         finding = _found(database="CSMAR", table="TRD", field="ROA", record_count=12345)
-        _wire_models(mocker, react_responses=[ai_final], extractor_findings=[finding])
+        _wire_agent(mocker, findings=[finding])
 
         graph = build_probe_subgraph(
             tools=[csmar_probe], prompt="p", per_variable_max_calls=3
@@ -348,12 +295,7 @@ class TestFoundSingleVariable:
 
 class TestHardNotFound:
     def test_hard_not_found_routes_end_with_workflow_status(self, mocker: Any) -> None:
-        ai_final = AIMessage(content="cannot find ROA in any csmar table")
-        _wire_models(
-            mocker,
-            react_responses=[ai_final],
-            extractor_findings=[_not_found()],
-        )
+        _wire_agent(mocker, findings=[_not_found()])
 
         graph = build_probe_subgraph(
             tools=[csmar_probe], prompt="p", per_variable_max_calls=3
@@ -379,21 +321,13 @@ class TestHardNotFound:
 
 class TestSoftSubstituteSuccess:
     def test_soft_substitute_writes_back_spec_and_manifest(self, mocker: Any) -> None:
-        # Round 1: original ROE not found, suggest ROA
-        ai_round1 = AIMessage(content="ROE not in csmar; suggest ROA")
         finding1 = _not_found(
             substitute_name="ROA",
             substitute_description="ROA proxies ROE",
             substitute_reason="similar economic meaning",
         )
-        # Round 2: ROA found
-        ai_round2 = AIMessage(content="ROA found at CSMAR.TRD.ROA")
         finding2 = _found(database="CSMAR", table="TRD", field="ROA")
-        _wire_models(
-            mocker,
-            react_responses=[ai_round1, ai_round2],
-            extractor_findings=[finding1, finding2],
-        )
+        _wire_agent(mocker, findings=[finding1, finding2])
 
         graph = build_probe_subgraph(
             tools=[csmar_probe], prompt="p", per_variable_max_calls=3
@@ -428,19 +362,13 @@ class TestSoftSubstituteSuccess:
 
 class TestSoftSubstituteFailure:
     def test_substitute_chain_terminates_after_one_attempt(self, mocker: Any) -> None:
-        ai_round1 = AIMessage(content="ROE missing; suggest ROA")
         finding1 = _not_found(
             substitute_name="ROA",
             substitute_description="d",
             substitute_reason="r",
         )
-        ai_round2 = AIMessage(content="ROA also missing")
         finding2 = _not_found()  # no further substitute suggestion
-        bound, structured = _wire_models(
-            mocker,
-            react_responses=[ai_round1, ai_round2],
-            extractor_findings=[finding1, finding2],
-        )
+        mock_create, _ = _wire_agent(mocker, findings=[finding1, finding2])
 
         graph = build_probe_subgraph(
             tools=[csmar_probe], prompt="p", per_variable_max_calls=3
@@ -458,24 +386,18 @@ class TestSoftSubstituteFailure:
         assert report["overall_status"] == "success"
         assert "workflow_status" not in result
 
-        # Exactly two react/extractor rounds — no third substitute generation
-        assert bound.call_count == 2
-        assert structured.call_count == 2
+        # Exactly two agent creations — no third substitute generation
+        assert mock_create.call_count == 2
+
         # Empty manifest since nothing was found
         assert result["download_manifest"]["items"] == []
 
 
 class TestMultiVariableSameTable:
     def test_two_variables_same_table_merge_into_one_task(self, mocker: Any) -> None:
-        ai1 = AIMessage(content="ROA at CSMAR.TRD.ROA")
-        ai2 = AIMessage(content="LEV at CSMAR.TRD.LEV")
         finding1 = _found(database="CSMAR", table="TRD", field="ROA")
         finding2 = _found(database="CSMAR", table="TRD", field="LEV")
-        _wire_models(
-            mocker,
-            react_responses=[ai1, ai2],
-            extractor_findings=[finding1, finding2],
-        )
+        _wire_agent(mocker, findings=[finding1, finding2])
 
         graph = build_probe_subgraph(
             tools=[csmar_probe], prompt="p", per_variable_max_calls=3
@@ -497,18 +419,13 @@ class TestMultiVariableSameTable:
 
 
 # ---------------------------------------------------------------------------
-# F26: available_databases 注入
+# F26: available_databases injection
 # ---------------------------------------------------------------------------
 
 
 class TestAvailableDatabasesInjection:
     def test_humanmessage_contains_available_databases(self, mocker: Any) -> None:
-        ai_final = AIMessage(content="resolved using injected list")
-        _wire_models(
-            mocker,
-            react_responses=[ai_final],
-            extractor_findings=[_found()],
-        )
+        _, captured = _wire_agent(mocker, findings=[_found()])
 
         graph = build_probe_subgraph(
             tools=[csmar_probe], prompt="sys", per_variable_max_calls=3
@@ -516,7 +433,7 @@ class TestAvailableDatabasesInjection:
         databases_text = (
             'Returned 2 purchased databases.\n{"databases": ["CSMAR", "RESSET"]}'
         )
-        result = asyncio.run(
+        asyncio.run(
             graph.ainvoke(
                 {
                     "empirical_spec": _spec([_var("ROA")]),
@@ -525,8 +442,8 @@ class TestAvailableDatabasesInjection:
             )
         )
 
-        msgs = result["messages"]
-        human_msg = next(m for m in msgs if isinstance(m, HumanMessage))
-        assert "Purchased databases" in human_msg.content
-        assert "CSMAR" in human_msg.content
-        assert "RESSET" in human_msg.content
+        human = captured[0]["messages"][0]
+        assert isinstance(human, HumanMessage)
+        assert "Purchased databases" in human.content
+        assert "CSMAR" in human.content
+        assert "RESSET" in human.content

@@ -30,6 +30,7 @@ harness-stata/
 │   ├── config.py                 # 配置
 │   ├── cli.py                    # typer CLI 入口
 │   ├── __main__.py               # python -m harness_stata 入口
+│   ├── studio.py                 # LangSmith Studio / langgraph dev 入口
 │   ├── nodes/                    # 主图视角下的 8 个节点
 │   │   ├── _writes.py            # @writes_to 装饰器，单切片节点返回 bare slice 的包装
 │   │   ├── requirement_analysis.py
@@ -37,15 +38,15 @@ harness-stata/
 │   │   ├── data_probe.py         # 内部调用 subgraphs/probe_subgraph 工厂
 │   │   ├── hitl.py
 │   │   ├── data_download.py
-│   │   ├── data_cleaning.py      # 内部调用 subgraphs/generic_react 工厂
-│   │   ├── descriptive_stats.py  # 内部调用 subgraphs/generic_react 工厂
-│   │   └── regression.py         # 内部调用 subgraphs/generic_react 工厂
+│   │   ├── data_cleaning.py      # 内联 create_agent（DuckDB SQL-first）
+│   │   ├── descriptive_stats.py  # 内联 create_agent
+│   │   └── regression.py         # 内联 create_agent
 │   ├── subgraphs/                # 可复用子图工厂（实现细节）
-│   │   ├── generic_react.py      # build_react_subgraph(tools, prompt, max_iters)
 │   │   └── probe_subgraph.py     # build_probe_subgraph(tools, per_variable_max_calls)
 │   ├── prompts/                  # Markdown 格式 system prompt
 │   │   └── __init__.py           # 提供 load_prompt(name)
 │   └── clients/                  # 外部依赖统一入口（contextmanager 管理生命周期）
+│       ├── _mcp_interceptors.py  # MCP 拦截器
 │       ├── csmar.py              # csmar-mcp 客户端适配
 │       ├── stata.py              # stata-executor-mcp 客户端适配
 │       └── llm.py                # LLM 客户端封装

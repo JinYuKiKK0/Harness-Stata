@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 from langchain_core.tools import BaseTool
 from pytest_mock import MockerFixture
 
-from harness_stata.nodes.regression import regression
+from harness_stata.nodes.regression import _RegressionOutput, regression
 from harness_stata.state import EmpiricalSpec, MergedDataset, ModelPlan, WorkflowState
 
 # ---------------------------------------------------------------------------
@@ -31,23 +30,28 @@ async def _empty_stata_tools() -> AsyncIterator[list[BaseTool]]:
 def _patch_env(
     mocker: MockerFixture,
     *,
-    final_content: str,
-    tool_calls: list[dict[str, Any]] | None = None,
+    payload: _RegressionOutput | None = None,
+    raise_truncation: bool = False,
 ) -> MagicMock:
-    """Patch build_react_subgraph + get_stata_tools at the regression module."""
-    final_msg = AIMessage(content=final_content, tool_calls=tool_calls or [])
-    fake_result = {"messages": [final_msg], "iteration_count": 1}
-    fake_subgraph = MagicMock()
-    fake_subgraph.ainvoke = AsyncMock(return_value=fake_result)
+    """Patch create_agent + get_stata_tools at the regression module."""
+    if raise_truncation:
+        fake_agent = MagicMock()
+        fake_agent.ainvoke = AsyncMock(side_effect=ModelCallLimitExceededError(1, 1, None, 1))
+    else:
+        assert payload is not None
+        fake_agent = MagicMock()
+        fake_agent.ainvoke = AsyncMock(
+            return_value={"messages": [], "structured_response": payload}
+        )
     mocker.patch(
-        "harness_stata.nodes.regression.build_react_subgraph",
-        return_value=fake_subgraph,
+        "harness_stata.nodes.regression.create_agent",
+        return_value=fake_agent,
     )
     mocker.patch(
         "harness_stata.nodes.regression.get_stata_tools",
         side_effect=lambda: _empty_stata_tools(),
     )
-    return fake_subgraph
+    return fake_agent
 
 
 def _make_session_dir(tmp_path: Path) -> Path:
@@ -88,14 +92,14 @@ def _run(state: WorkflowState) -> dict[str, Any]:
     return asyncio.run(regression(state))
 
 
-def _final_payload(do_file: Path, log_file: Path, actual_sign: str) -> str:
-    return json.dumps(
-        {
-            "do_file_path": str(do_file),
-            "log_file_path": str(log_file),
-            "actual_sign": actual_sign,
-            "summary": "Core coefficient estimated; see log for details.",
-        }
+def _payload(
+    do_file: Path, log_file: Path, actual_sign: Literal["+", "-", "0"]
+) -> _RegressionOutput:
+    return _RegressionOutput(
+        do_file_path=str(do_file),
+        log_file_path=str(log_file),
+        actual_sign=actual_sign,
+        summary="Core coefficient estimated; see log for details.",
     )
 
 
@@ -112,7 +116,7 @@ def test_regression_success_sign_consistent(
 ) -> None:
     session_dir = _make_session_dir(tmp_path)
     merged_csv, do_file, log_file = _write_artifacts(session_dir)
-    _patch_env(mocker, final_content=_final_payload(do_file, log_file, "+"))
+    _patch_env(mocker, payload=_payload(do_file, log_file, "+"))
 
     state = _base_state(make_empirical_spec(), make_model_plan(), _make_merged(merged_csv))
     out = _run(state)
@@ -138,7 +142,7 @@ def test_regression_success_sign_inconsistent_does_not_raise(
     """Sign mismatch is a valid empirical outcome, not an error."""
     session_dir = _make_session_dir(tmp_path)
     merged_csv, do_file, log_file = _write_artifacts(session_dir)
-    _patch_env(mocker, final_content=_final_payload(do_file, log_file, "-"))
+    _patch_env(mocker, payload=_payload(do_file, log_file, "-"))
 
     state = _base_state(make_empirical_spec(), make_model_plan(), _make_merged(merged_csv))
     out = _run(state)
@@ -158,7 +162,7 @@ def test_regression_success_sign_ambiguous_always_consistent(
 ) -> None:
     session_dir = _make_session_dir(tmp_path)
     merged_csv, do_file, log_file = _write_artifacts(session_dir)
-    _patch_env(mocker, final_content=_final_payload(do_file, log_file, "+"))
+    _patch_env(mocker, payload=_payload(do_file, log_file, "+"))
 
     plan = make_model_plan(
         core_hypothesis={
@@ -187,39 +191,13 @@ def test_regression_react_truncation_raises(
     make_empirical_spec: Callable[..., EmpiricalSpec],
     make_model_plan: Callable[..., ModelPlan],
 ) -> None:
-    """Final AIMessage with non-empty tool_calls = max_iterations hit."""
+    """ModelCallLimitExceededError is translated to RuntimeError."""
     session_dir = _make_session_dir(tmp_path)
     merged_csv, _, _ = _write_artifacts(session_dir)
-    _patch_env(
-        mocker,
-        final_content="",
-        tool_calls=[
-            {
-                "name": "run_do",
-                "args": {"script_path": "/tmp/x.do"},
-                "id": "call_1",
-                "type": "tool_call",
-            }
-        ],
-    )
+    _patch_env(mocker, raise_truncation=True)
 
     state = _base_state(make_empirical_spec(), make_model_plan(), _make_merged(merged_csv))
     with pytest.raises(RuntimeError, match="max_iterations"):
-        _run(state)
-
-
-def test_regression_invalid_actual_sign_raises(
-    mocker: MockerFixture,
-    tmp_path: Path,
-    make_empirical_spec: Callable[..., EmpiricalSpec],
-    make_model_plan: Callable[..., ModelPlan],
-) -> None:
-    session_dir = _make_session_dir(tmp_path)
-    merged_csv, do_file, log_file = _write_artifacts(session_dir)
-    _patch_env(mocker, final_content=_final_payload(do_file, log_file, "positive"))
-
-    state = _base_state(make_empirical_spec(), make_model_plan(), _make_merged(merged_csv))
-    with pytest.raises(RuntimeError, match="actual_sign"):
         _run(state)
 
 
@@ -236,7 +214,7 @@ def test_regression_log_file_missing_raises(
     do_file = session_dir / "regression.do"
     do_file.write_text("reg roa digital\n", encoding="utf-8")
     missing_log = session_dir / "regression.log"  # deliberately NOT created
-    _patch_env(mocker, final_content=_final_payload(do_file, missing_log, "+"))
+    _patch_env(mocker, payload=_payload(do_file, missing_log, "+"))
 
     state = _base_state(make_empirical_spec(), make_model_plan(), _make_merged(merged_csv))
     with pytest.raises(RuntimeError, match="log_file_path"):

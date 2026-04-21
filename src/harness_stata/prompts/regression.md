@@ -39,21 +39,12 @@
    - 系数极小(约等于 0)或不显著(`p > 0.1` 且系数很小) → `"0"`
    - **符号判读只看数值方向,不做"与预期一致才填"的自我审查**;即使与 `expected_sign` 冲突,也如实回填。
 
-## 终止契约
+## 终止输出
 
-完成后**最后一条消息不得再发起 tool_call**,必须直接在 `content` 中输出一段合法 JSON(纯 JSON,无 markdown 围栏、无额外解释文字),结构如下:
-
-```
-{
-  "do_file_path": "<session_dir>/regression.do",
-  "log_file_path": "<session_dir>/regression.log",
-  "actual_sign": "+" | "-" | "0",
-  "summary": "<核心系数估计值与 t/p 值 + 是否显著 + 与预期符号对比的自然语言概述,3-6 句>"
-}
-```
+完成后按运行时 schema 返回:
 
 - `do_file_path` / `log_file_path`:与节点传入的绝对路径一致,两文件都必须真实落盘,否则节点将 raise。
 - `actual_sign`:**必须**恰好是 `"+"` / `"-"` / `"0"` 三者之一。
-- `summary`:面向用户的结论概述;节点会原样写入 `RegressionResult.summary`。
+- `summary`:核心系数估计值与 t/p 值 + 是否显著 + 与预期符号对比的自然语言概述(3-6 句);节点会原样写入 `RegressionResult.summary`。
 
-节点接到该 JSON 后会:(1) 验证两个文件存在;(2) 对照 `expected_sign` 生成 `SignCheck.consistent`——**符号不一致不是错误**,只是实证结果本身,如实回填即可。
+节点接到响应后会:(1) 验证两个文件存在;(2) 对照 `expected_sign` 生成 `SignCheck.consistent`——**符号不一致不是错误**,只是实证结果本身,如实回填即可。

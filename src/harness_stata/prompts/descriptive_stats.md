@@ -37,19 +37,11 @@
 5. 落盘 do 文件到 `<session_dir>/descriptive_stats.do`,再 `run_do` 执行;若 `status=failed`,阅读 `diagnostic_excerpt` 修正后重试。
 6. 从 log / `result_text` 中提炼面向用户的结论:关键变量的量级与分布、明显缺失列、逻辑校验中违反约束的条目(若有)。
 
-## 终止契约
+## 终止输出
 
-完成后**最后一条消息不得再发起 tool_call**,必须直接在 `content` 中输出一段合法 JSON(纯 JSON,无 markdown 围栏、无额外解释文字),结构如下:
-
-```
-{
-  "do_file_path": "<session_dir>/descriptive_stats.do",
-  "log_file_path": "<session_dir>/descriptive_stats.log",
-  "summary": "<描述性统计关键发现 + 缺失/异常提示 + 逻辑校验结论的自然语言概述,4-8 句>"
-}
-```
+完成后按运行时 schema 返回:
 
 - `do_file_path` / `log_file_path`:与节点传入的绝对路径一致,两文件都必须真实落盘,否则节点将 raise。
-- `summary`:面向用户的结论概述;节点会原样写入 `DescStatsReport.summary`。
+- `summary`:面向用户的结论概述(描述性统计关键发现 + 缺失/异常提示 + 逻辑校验结论,4-8 句);节点会原样写入 `DescStatsReport.summary`。
 
-节点接到该 JSON 后会:(1) 校验 3 个字段均为非空字符串;(2) 验证两个文件真实存在;(3) 组装 `DescStatsReport` 并继续流向后续的基准回归节点。
+节点接到响应后会:(1) 校验 3 个字段均为非空字符串;(2) 验证两个文件真实存在;(3) 组装 `DescStatsReport` 并继续流向后续的基准回归节点。

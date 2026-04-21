@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,11 +10,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 from langchain_core.tools import BaseTool
 from pytest_mock import MockerFixture
 
-from harness_stata.nodes.descriptive_stats import descriptive_stats
+from harness_stata.nodes.descriptive_stats import _DescStatsOutput, descriptive_stats
 from harness_stata.state import EmpiricalSpec, MergedDataset, WorkflowState
 
 # ---------------------------------------------------------------------------
@@ -31,23 +30,28 @@ async def _empty_stata_tools() -> AsyncIterator[list[BaseTool]]:
 def _patch_env(
     mocker: MockerFixture,
     *,
-    final_content: str,
-    tool_calls: list[dict[str, Any]] | None = None,
+    payload: _DescStatsOutput | None = None,
+    raise_truncation: bool = False,
 ) -> MagicMock:
-    """Patch build_react_subgraph + get_stata_tools at the descriptive_stats module."""
-    final_msg = AIMessage(content=final_content, tool_calls=tool_calls or [])
-    fake_result = {"messages": [final_msg], "iteration_count": 1}
-    fake_subgraph = MagicMock()
-    fake_subgraph.ainvoke = AsyncMock(return_value=fake_result)
+    """Patch create_agent + get_stata_tools at the descriptive_stats module."""
+    if raise_truncation:
+        fake_agent = MagicMock()
+        fake_agent.ainvoke = AsyncMock(side_effect=ModelCallLimitExceededError(1, 1, None, 1))
+    else:
+        assert payload is not None
+        fake_agent = MagicMock()
+        fake_agent.ainvoke = AsyncMock(
+            return_value={"messages": [], "structured_response": payload}
+        )
     mocker.patch(
-        "harness_stata.nodes.descriptive_stats.build_react_subgraph",
-        return_value=fake_subgraph,
+        "harness_stata.nodes.descriptive_stats.create_agent",
+        return_value=fake_agent,
     )
     mocker.patch(
         "harness_stata.nodes.descriptive_stats.get_stata_tools",
         side_effect=lambda: _empty_stata_tools(),
     )
-    return fake_subgraph
+    return fake_agent
 
 
 def _make_session_dir(tmp_path: Path) -> Path:
@@ -84,16 +88,14 @@ def _run(state: WorkflowState) -> dict[str, Any]:
     return asyncio.run(descriptive_stats(state))
 
 
-def _final_payload(do_file: Path, log_file: Path) -> str:
-    return json.dumps(
-        {
-            "do_file_path": str(do_file),
-            "log_file_path": str(log_file),
-            "summary": (
-                "Mean ROA around 0.1; digital transformation index roughly uniform."
-                " No missing values detected; logic checks passed."
-            ),
-        }
+def _payload(do_file: Path, log_file: Path) -> _DescStatsOutput:
+    return _DescStatsOutput(
+        do_file_path=str(do_file),
+        log_file_path=str(log_file),
+        summary=(
+            "Mean ROA around 0.1; digital transformation index roughly uniform."
+            " No missing values detected; logic checks passed."
+        ),
     )
 
 
@@ -109,7 +111,7 @@ def test_descriptive_stats_success_returns_report(
 ) -> None:
     session_dir = _make_session_dir(tmp_path)
     merged_csv, do_file, log_file = _write_artifacts(session_dir)
-    _patch_env(mocker, final_content=_final_payload(do_file, log_file))
+    _patch_env(mocker, payload=_payload(do_file, log_file))
 
     state = _base_state(make_empirical_spec(), _make_merged(merged_csv))
     out = _run(state)
@@ -129,7 +131,7 @@ def test_descriptive_stats_success_preserves_merged_session_dir(
 ) -> None:
     session_dir = _make_session_dir(tmp_path)
     merged_csv, do_file, log_file = _write_artifacts(session_dir)
-    _patch_env(mocker, final_content=_final_payload(do_file, log_file))
+    _patch_env(mocker, payload=_payload(do_file, log_file))
 
     state = _base_state(make_empirical_spec(), _make_merged(merged_csv))
     out = _run(state)
@@ -149,21 +151,10 @@ def test_descriptive_stats_react_truncation_raises(
     tmp_path: Path,
     make_empirical_spec: Callable[..., EmpiricalSpec],
 ) -> None:
-    """Final AIMessage with non-empty tool_calls = max_iterations hit."""
+    """ModelCallLimitExceededError is translated to RuntimeError."""
     session_dir = _make_session_dir(tmp_path)
     merged_csv, _, _ = _write_artifacts(session_dir)
-    _patch_env(
-        mocker,
-        final_content="",
-        tool_calls=[
-            {
-                "name": "run_do",
-                "args": {"script_path": "/tmp/x.do"},
-                "id": "call_1",
-                "type": "tool_call",
-            }
-        ],
-    )
+    _patch_env(mocker, raise_truncation=True)
 
     state = _base_state(make_empirical_spec(), _make_merged(merged_csv))
     with pytest.raises(RuntimeError, match="max_iterations"):
@@ -182,7 +173,7 @@ def test_descriptive_stats_log_file_missing_raises(
     do_file = session_dir / "descriptive_stats.do"
     do_file.write_text("summarize roa digital\n", encoding="utf-8")
     missing_log = session_dir / "descriptive_stats.log"  # deliberately NOT created
-    _patch_env(mocker, final_content=_final_payload(do_file, missing_log))
+    _patch_env(mocker, payload=_payload(do_file, missing_log))
 
     state = _base_state(make_empirical_spec(), _make_merged(merged_csv))
     with pytest.raises(RuntimeError, match="log_file_path"):

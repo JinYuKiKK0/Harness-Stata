@@ -2,13 +2,24 @@
 
 ## 当前焦点
 
-F20 — data_cleaning 节点从 pandas REPL 重构为 DuckDB SQL-first：LLM 不再裸写 pandas，而是对预注册的 `src_<source_table>` 视图写 SQL；节点 deterministic 导出 final_view 并自动 dump 所有中间 view 到 `_stage/` 供调试。
+ReAct 子图迁移到 `langchain.agents.create_agent`：删除手写 `generic_react.py`，data_cleaning / descriptive_stats / regression 节点改用 `create_agent + ModelCallLimitMiddleware + response_format`，probe_subgraph 内层 agent 改用 `create_agent + ToolCallLimitMiddleware`，顺带修复 `docs/bug.md` 记录的 `_extract_finding` AssertionError（原因：二次 `with_structured_output` 提取，现在一次 `response_format` 拿结果）。
 
-MVP 前 25 个 feature (F01-F25) 已 `passes=true`；F26（probe list_databases 预拉）与本次 F20 重构均已过 9/9 质量门禁。
+9/9 质量门禁已通过。
 
 ## 当前上下文
 
 <!-- 每次任务完成覆写此部分。保持简洁。 -->
+
+- 本次会话 — ReAct 子图全面迁移到 `create_agent`：
+  - 动机：4 个 ReAct 节点依赖手写 `generic_react.py`，已被 git 删除导致项目无法运行；同时 `create_agent` 官方覆盖 99% 场景，自带 middleware、结构化输出、LangSmith 追踪。
+  - 核心变更：
+    - 删除 `subgraphs/generic_react.py` + `tests/subgraphs/test_generic_react.py`
+    - `data_cleaning` / `descriptive_stats` / `regression` 3 个节点内联 `create_agent + ModelCallLimitMiddleware(exit_behavior="error") + response_format=<Pydantic>`；`ModelCallLimitExceededError` catch 后 re-raise 为 `RuntimeError("max_iterations...")`
+    - `probe_subgraph._variable_react` 改为 `create_agent + ToolCallLimitMiddleware(exit_behavior="end") + response_format=_VariableProbeFindingModel`；删除 `_extract_finding` / `_format_trace` 二次提取步骤；`ProbeState` 新增 `variable_finding` 字段
+    - 4 个测试文件 mock 对象从 `build_react_subgraph` / `get_chat_model().bind_tools()` 改为 mock `create_agent` 返回 `{"messages": [...], "structured_response": <Pydantic>}`
+    - `ModelCallLimitExceededError` 构造参数修正为 `(thread_count, run_count, thread_limit, run_limit)`
+    - `CLAUDE.md` 架构树移除 `generic_react.py`，新增 `studio.py` + `_mcp_interceptors.py`
+  - 已知保留风险：qwen-plus + ToolStrategy 输出 list/dict 字段不稳定（`docs/bug.md` 2 次记录），用户选择"硬抗等换 provider"
 
 - 本次会话重构 — F20 数据清洗节点改用 DuckDB SQL：
   - 动机：DataFrame 命令式清洗心智负担重、中间态无名难审计；换成 SQL + 命名 VIEW 后每一步都是可查询的声明式中间态。
@@ -57,7 +68,7 @@ MVP 前 25 个 feature (F01-F25) 已 `passes=true`；F26（probe list_databases 
 
 ## 下一步
 
-- **MVP 本地 CLI 已完成**。所有 25 个 feature (F01-F25) passes=true。下一阶段方向由用户决定:
+- **MVP 本地 CLI 已完成**。所有 25+F26 个 feature passes=true，ReAct 子图已迁移到 `create_agent`。下一阶段方向由用户决定:
   - (a) 真实端到端联调:启动 csmar-mcp / stata-executor-mcp 服务,配 DashScope API key,跑真实 UserRequest 验证 LLM + MCP 链路
   - (b) 技术债清理:probe_subgraph.py 487 行拆分 / stata-executor ruff+pyright 收口 / tests/ 纳入 ruff format 门禁
   - (c) Web 迭代启动:把 CLI 换成 HTTP/WS 适配层,checkpointer 升级为 SqliteSaver 以跨进程 resume

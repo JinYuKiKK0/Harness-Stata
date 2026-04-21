@@ -1,12 +1,12 @@
 """Regression node (F22) -- terminal product node.
 
-ReAct-driven. Consumes MergedDataset (F20) + ModelPlan (F11) + EmpiricalSpec
-(F09), binds the stata-executor MCP tool set via :func:`get_stata_tools`,
-lets the LLM write and execute a do file that runs the baseline regression,
-then reports the core coefficient sign.
+Driven by :func:`langchain.agents.create_agent`. Consumes MergedDataset (F20),
+ModelPlan (F11) and EmpiricalSpec (F09), binds the stata-executor MCP tool set
+via :func:`get_stata_tools`, lets the LLM write and execute a do file that runs
+the baseline regression, then reports the core coefficient sign.
 
-The node enforces post-conditions (final JSON schema, do/log files on disk,
-``actual_sign`` within ``{"+", "-", "0"}``) and assembles
+The node enforces post-conditions (structured response schema, do/log files on
+disk, ``actual_sign`` within ``{"+", "-", "0"}``) and assembles
 :class:`RegressionResult` with a structured :class:`SignCheck`. Sign mismatch
 vs ``ModelPlan.core_hypothesis.expected_sign`` is **not** an error -- it is
 recorded as ``sign_check.consistent=False`` and ``workflow_status=success``.
@@ -14,13 +14,16 @@ recorded as ``sign_check.consistent=False`` and ``workflow_status=success``.
 
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain.agents import create_agent  # pyright: ignore[reportUnknownVariableType]
+from langchain.agents.middleware import ModelCallLimitMiddleware
+from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
+from langchain_core.messages import HumanMessage
+from pydantic import BaseModel, Field
 
+from harness_stata.clients.llm import get_chat_model
 from harness_stata.clients.stata import get_stata_tools
 from harness_stata.prompts import load_prompt
 from harness_stata.state import (
@@ -31,13 +34,21 @@ from harness_stata.state import (
     SignCheck,
     WorkflowState,
 )
-from harness_stata.subgraphs.generic_react import ReactState, build_react_subgraph
 
 _MAX_ITERATIONS = 20
 _DO_FILENAME = "regression.do"
 _LOG_FILENAME = "regression.log"
-_VALID_ACTUAL_SIGNS = {"+", "-", "0"}
-_FENCE_RE = re.compile(r"^```(?:json)?\s*\n(.*?)\n```\s*$", re.DOTALL)
+
+
+class _RegressionOutput(BaseModel):
+    """LLM-facing structured-output schema for the regression terminal step."""
+
+    do_file_path: str = Field(description="Absolute path of the .do file written to disk.")
+    log_file_path: str = Field(description="Absolute path of the .log file produced by Stata.")
+    actual_sign: Literal["+", "-", "0"] = Field(
+        description="Sign of the core explanatory variable's coefficient."
+    )
+    summary: str = Field(description="Natural-language summary of regression output.")
 
 
 def _validate(state: WorkflowState) -> str | None:
@@ -95,47 +106,9 @@ def _build_human_prompt(
         f"do_file_path: {do_path}\n"
         f"log_file_path: {log_path}\n\n"
         "Write the do file to do_file_path, execute it (log must be produced at"
-        " log_file_path via `log using`), then emit the terminating JSON as"
-        " specified by the system prompt."
+        " log_file_path via `log using`), then return the structured response"
+        " (do_file_path, log_file_path, actual_sign, summary)."
     )
-
-
-def _extract_final_json(content: str) -> dict[str, Any]:
-    text = content.strip()
-    match = _FENCE_RE.match(text)
-    if match is not None:
-        text = match.group(1).strip()
-    try:
-        obj = json.loads(text)
-    except json.JSONDecodeError as exc:
-        msg = f"regression: cannot parse final AIMessage content as JSON: {exc}"
-        raise RuntimeError(msg) from exc
-    if not isinstance(obj, dict):
-        msg = f"regression: final JSON must be object, got {type(obj).__name__}"
-        raise RuntimeError(msg)
-    return cast("dict[str, Any]", obj)
-
-
-def _require_str(payload: dict[str, Any], key: str) -> str:
-    value = payload.get(key)
-    if not isinstance(value, str) or not value:
-        msg = f"regression: final JSON field {key!r} must be a non-empty string"
-        raise RuntimeError(msg)
-    return value
-
-
-def _validate_payload(payload: dict[str, Any]) -> tuple[str, str, str, str]:
-    do_file_path = _require_str(payload, "do_file_path")
-    log_file_path = _require_str(payload, "log_file_path")
-    actual_sign = _require_str(payload, "actual_sign")
-    summary = _require_str(payload, "summary")
-    if actual_sign not in _VALID_ACTUAL_SIGNS:
-        msg = (
-            f"regression: actual_sign must be one of {sorted(_VALID_ACTUAL_SIGNS)!r},"
-            f" got {actual_sign!r}"
-        )
-        raise RuntimeError(msg)
-    return do_file_path, log_file_path, actual_sign, summary
 
 
 def _assert_file_exists(path_str: str, role: str) -> None:
@@ -165,8 +138,8 @@ class RegressionOutput(TypedDict):
 async def regression(state: WorkflowState) -> RegressionOutput:
     """Run the baseline regression and produce the terminal RegressionResult.
 
-    Drives a generic ReAct subgraph bound to the stata-executor MCP tools.
-    The LLM writes + runs a do file; this node validates the terminating JSON,
+    Drives a :func:`create_agent` bound to the stata-executor MCP tools. The LLM
+    writes + runs a do file; this node validates the structured response,
     confirms do/log exist on disk, and assembles RegressionResult with a
     SignCheck against ModelPlan.core_hypothesis.expected_sign.
     """
@@ -182,44 +155,51 @@ async def regression(state: WorkflowState) -> RegressionOutput:
     do_path = session_dir / _DO_FILENAME
     log_path = session_dir / _LOG_FILENAME
 
-    prompt = load_prompt("regression")
-
     async with get_stata_tools() as tools:
-        subgraph = build_react_subgraph(tools=tools, prompt=prompt, max_iterations=_MAX_ITERATIONS)
-        initial: ReactState = {
+        agent = create_agent(
+            model=get_chat_model(),
+            tools=tools,  # type: ignore[arg-type]
+            system_prompt=load_prompt("regression"),
+            middleware=[
+                ModelCallLimitMiddleware(run_limit=_MAX_ITERATIONS, exit_behavior="error"),
+            ],
+            response_format=_RegressionOutput,
+        )
+        initial = {
             "messages": [
                 HumanMessage(content=_build_human_prompt(spec, plan, merged, do_path, log_path))
-            ],
-            "iteration_count": 0,
+            ]
         }
-        result = await subgraph.ainvoke(initial)  # pyright: ignore[reportUnknownMemberType]
+        try:
+            result: dict[str, Any] = await agent.ainvoke(initial)  # type: ignore[reportUnknownMemberType]
+        except ModelCallLimitExceededError as exc:
+            raise RuntimeError(
+                f"regression: ReAct reached max_iterations ({_MAX_ITERATIONS})"
+                f" without a terminal response"
+            ) from exc
 
-    messages = cast("list[Any]", result.get("messages", []))
-    if not messages:
-        raise RuntimeError("regression: ReAct subgraph returned no messages")
-    last = messages[-1]
-    if not isinstance(last, AIMessage):
-        msg = f"regression: final message is not AIMessage (got {type(last).__name__})"
-        raise RuntimeError(msg)
-    if last.tool_calls:
-        raise RuntimeError("regression: ReAct reached max_iterations without a terminal AIMessage")
+    payload = result.get("structured_response")
+    if not isinstance(payload, _RegressionOutput):
+        raise RuntimeError(
+            f"regression: agent did not produce a structured response"
+            f" (got {type(payload).__name__})"
+        )
+    if not payload.do_file_path:
+        raise RuntimeError("regression: structured_response.do_file_path is empty")
+    if not payload.log_file_path:
+        raise RuntimeError("regression: structured_response.log_file_path is empty")
+    if not payload.summary:
+        raise RuntimeError("regression: structured_response.summary is empty")
 
-    content_attr = cast("Any", last.content)  # pyright: ignore[reportUnknownMemberType]
-    if not isinstance(content_attr, str):
-        msg = f"regression: AIMessage.content must be str, got {type(content_attr).__name__}"
-        raise RuntimeError(msg)
-    payload = _extract_final_json(content_attr)
-    do_file_path, log_file_path, actual_sign, summary = _validate_payload(payload)
+    _assert_file_exists(payload.do_file_path, "do_file_path")
+    _assert_file_exists(payload.log_file_path, "log_file_path")
 
-    _assert_file_exists(do_file_path, "do_file_path")
-    _assert_file_exists(log_file_path, "log_file_path")
-
-    sign_check = _compute_sign_check(plan, actual_sign)
+    sign_check = _compute_sign_check(plan, payload.actual_sign)
     regression_result: RegressionResult = {
-        "do_file_path": do_file_path,
-        "log_file_path": log_file_path,
+        "do_file_path": payload.do_file_path,
+        "log_file_path": payload.log_file_path,
         "sign_check": sign_check,
-        "summary": summary,
+        "summary": payload.summary,
     }
     return {
         "regression_result": regression_result,

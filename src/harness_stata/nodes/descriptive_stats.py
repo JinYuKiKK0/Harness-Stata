@@ -1,24 +1,28 @@
 """Descriptive statistics node (F21).
 
-ReAct-driven. Consumes MergedDataset (F20) + EmpiricalSpec (F09), binds the
-stata-executor MCP tool set via :func:`get_stata_tools`, lets the LLM write
-and execute a do file that runs descriptive statistics, missing/outlier scans
-and logic checks, then reports key findings.
+Driven by :func:`langchain.agents.create_agent`. Consumes MergedDataset (F20)
+and EmpiricalSpec (F09), binds the stata-executor MCP tool set via
+:func:`get_stata_tools`, lets the LLM write and execute a do file that runs
+descriptive statistics, missing/outlier scans and logic checks, then reports
+key findings.
 
-The node enforces post-conditions (final JSON schema, do/log files on disk)
-and assembles :class:`DescStatsReport`. As a non-terminal node it does NOT
+The node enforces post-conditions (structured response schema, do/log files on
+disk) and assembles :class:`DescStatsReport`. As a non-terminal node it does NOT
 write ``workflow_status`` -- the graph continues toward the regression node.
 """
 
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain.agents import create_agent  # pyright: ignore[reportUnknownVariableType]
+from langchain.agents.middleware import ModelCallLimitMiddleware
+from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
+from langchain_core.messages import HumanMessage
+from pydantic import BaseModel, Field
 
+from harness_stata.clients.llm import get_chat_model
 from harness_stata.clients.stata import get_stata_tools
 from harness_stata.nodes._writes import awrites_to
 from harness_stata.prompts import load_prompt
@@ -28,12 +32,18 @@ from harness_stata.state import (
     MergedDataset,
     WorkflowState,
 )
-from harness_stata.subgraphs.generic_react import ReactState, build_react_subgraph
 
 _MAX_ITERATIONS = 15
 _DO_FILENAME = "descriptive_stats.do"
 _LOG_FILENAME = "descriptive_stats.log"
-_FENCE_RE = re.compile(r"^```(?:json)?\s*\n(.*?)\n```\s*$", re.DOTALL)
+
+
+class _DescStatsOutput(BaseModel):
+    """LLM-facing structured-output schema for the descriptive_stats terminal step."""
+
+    do_file_path: str = Field(description="Absolute path of the .do file written to disk.")
+    log_file_path: str = Field(description="Absolute path of the .log file produced by Stata.")
+    summary: str = Field(description="Natural-language summary of key findings.")
 
 
 def _validate(state: WorkflowState) -> str | None:
@@ -79,40 +89,9 @@ def _build_human_prompt(
         f"do_file_path: {do_path}\n"
         f"log_file_path: {log_path}\n\n"
         "Write the do file to do_file_path, execute it (log must be produced at"
-        " log_file_path via `log using`), then emit the terminating JSON as"
-        " specified by the system prompt."
+        " log_file_path via `log using`), then return the structured response"
+        " (do_file_path, log_file_path, summary)."
     )
-
-
-def _extract_final_json(content: str) -> dict[str, Any]:
-    text = content.strip()
-    match = _FENCE_RE.match(text)
-    if match is not None:
-        text = match.group(1).strip()
-    try:
-        obj = json.loads(text)
-    except json.JSONDecodeError as exc:
-        msg = f"descriptive_stats: cannot parse final AIMessage content as JSON: {exc}"
-        raise RuntimeError(msg) from exc
-    if not isinstance(obj, dict):
-        msg = f"descriptive_stats: final JSON must be object, got {type(obj).__name__}"
-        raise RuntimeError(msg)
-    return cast("dict[str, Any]", obj)
-
-
-def _require_str(payload: dict[str, Any], key: str) -> str:
-    value = payload.get(key)
-    if not isinstance(value, str) or not value:
-        msg = f"descriptive_stats: final JSON field {key!r} must be a non-empty string"
-        raise RuntimeError(msg)
-    return value
-
-
-def _validate_payload(payload: dict[str, Any]) -> tuple[str, str, str]:
-    do_file_path = _require_str(payload, "do_file_path")
-    log_file_path = _require_str(payload, "log_file_path")
-    summary = _require_str(payload, "summary")
-    return do_file_path, log_file_path, summary
 
 
 def _assert_file_exists(path_str: str, role: str) -> None:
@@ -126,10 +105,10 @@ def _assert_file_exists(path_str: str, role: str) -> None:
 async def descriptive_stats(state: WorkflowState) -> DescStatsReport:
     """Run descriptive statistics and produce DescStatsReport.
 
-    Drives a generic ReAct subgraph bound to the stata-executor MCP tools.
-    The LLM writes + runs a do file; this node validates the terminating JSON
-    and confirms do/log exist on disk. Non-terminal: does not set
-    workflow_status, so the graph advances to the regression node next.
+    Drives a :func:`create_agent` bound to the stata-executor MCP tools. The LLM
+    writes + runs a do file; this node validates the structured response and
+    confirms do/log exist on disk. Non-terminal: does not set ``workflow_status``,
+    so the graph advances to the regression node next.
     """
     err = _validate(state)
     if err is not None:
@@ -142,42 +121,45 @@ async def descriptive_stats(state: WorkflowState) -> DescStatsReport:
     do_path = session_dir / _DO_FILENAME
     log_path = session_dir / _LOG_FILENAME
 
-    prompt = load_prompt("descriptive_stats")
-
     async with get_stata_tools() as tools:
-        subgraph = build_react_subgraph(tools=tools, prompt=prompt, max_iterations=_MAX_ITERATIONS)
-        initial: ReactState = {
-            "messages": [
-                HumanMessage(content=_build_human_prompt(spec, merged, do_path, log_path))
+        agent = create_agent(
+            model=get_chat_model(),
+            tools=tools,  # type: ignore[arg-type]
+            system_prompt=load_prompt("descriptive_stats"),
+            middleware=[
+                ModelCallLimitMiddleware(run_limit=_MAX_ITERATIONS, exit_behavior="error"),
             ],
-            "iteration_count": 0,
-        }
-        result = await subgraph.ainvoke(initial)  # pyright: ignore[reportUnknownMemberType]
-
-    messages = cast("list[Any]", result.get("messages", []))
-    if not messages:
-        raise RuntimeError("descriptive_stats: ReAct subgraph returned no messages")
-    last = messages[-1]
-    if not isinstance(last, AIMessage):
-        msg = f"descriptive_stats: final message is not AIMessage (got {type(last).__name__})"
-        raise RuntimeError(msg)
-    if last.tool_calls:
-        raise RuntimeError(
-            "descriptive_stats: ReAct reached max_iterations without a terminal AIMessage"
+            response_format=_DescStatsOutput,
         )
+        initial = {
+            "messages": [HumanMessage(content=_build_human_prompt(spec, merged, do_path, log_path))]
+        }
+        try:
+            result: dict[str, Any] = await agent.ainvoke(initial)  # type: ignore[reportUnknownMemberType]
+        except ModelCallLimitExceededError as exc:
+            raise RuntimeError(
+                f"descriptive_stats: ReAct reached max_iterations ({_MAX_ITERATIONS})"
+                f" without a terminal response"
+            ) from exc
 
-    content_attr = cast("Any", last.content)  # pyright: ignore[reportUnknownMemberType]
-    if not isinstance(content_attr, str):
-        msg = f"descriptive_stats: AIMessage.content must be str, got {type(content_attr).__name__}"
-        raise RuntimeError(msg)
-    payload = _extract_final_json(content_attr)
-    do_file_path, log_file_path, summary = _validate_payload(payload)
+    payload = result.get("structured_response")
+    if not isinstance(payload, _DescStatsOutput):
+        raise RuntimeError(
+            f"descriptive_stats: agent did not produce a structured response"
+            f" (got {type(payload).__name__})"
+        )
+    if not payload.do_file_path:
+        raise RuntimeError("descriptive_stats: structured_response.do_file_path is empty")
+    if not payload.log_file_path:
+        raise RuntimeError("descriptive_stats: structured_response.log_file_path is empty")
+    if not payload.summary:
+        raise RuntimeError("descriptive_stats: structured_response.summary is empty")
 
-    _assert_file_exists(do_file_path, "do_file_path")
-    _assert_file_exists(log_file_path, "log_file_path")
+    _assert_file_exists(payload.do_file_path, "do_file_path")
+    _assert_file_exists(payload.log_file_path, "log_file_path")
 
     return {
-        "do_file_path": do_file_path,
-        "log_file_path": log_file_path,
-        "summary": summary,
+        "do_file_path": payload.do_file_path,
+        "log_file_path": payload.log_file_path,
+        "summary": payload.summary,
     }
