@@ -1,11 +1,10 @@
-"""Unit tests for the data_cleaning node (F20)."""
+"""Unit tests for the data_cleaning node (F20, DuckDB SQL-first)."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -13,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pandas as pd
 import pytest
 from langchain_core.messages import AIMessage
+from langchain_core.tools import BaseTool
 from pytest_mock import MockerFixture
 
 from harness_stata.nodes.data_cleaning import data_cleaning
@@ -27,19 +27,37 @@ from harness_stata.state import DownloadedFile, EmpiricalSpec, WorkflowState
 def _patch_subgraph(
     mocker: MockerFixture,
     *,
+    sqls: Sequence[str] = (),
     final_content: str,
     tool_calls: list[dict[str, Any]] | None = None,
-) -> MagicMock:
-    """Patch build_react_subgraph to return a fake subgraph with canned ainvoke result."""
-    final_msg = AIMessage(content=final_content, tool_calls=tool_calls or [])
-    fake_result = {"messages": [final_msg], "iteration_count": 1}
-    fake_subgraph = MagicMock()
-    fake_subgraph.ainvoke = AsyncMock(return_value=fake_result)
+) -> None:
+    """Patch build_react_subgraph to execute ``sqls`` then return ``final_content``.
+
+    The fake subgraph exercises the real ``run_sql`` tool (so final_view
+    checks and intermediate-artifact dumps see a real DuckDB connection).
+    """
+
+    def _fake_build(
+        tools: Sequence[BaseTool], prompt: str, max_iterations: int
+    ) -> MagicMock:
+        del prompt, max_iterations  # unused in fake
+        assert len(tools) == 1, "data_cleaning binds exactly one run_sql tool"
+        sql_tool = tools[0]
+
+        async def _ainvoke(_initial: dict[str, Any]) -> dict[str, Any]:
+            for q in sqls:
+                await sql_tool.ainvoke({"query": q})
+            final_msg = AIMessage(content=final_content, tool_calls=tool_calls or [])
+            return {"messages": [final_msg], "iteration_count": 1}
+
+        fake = MagicMock()
+        fake.ainvoke = AsyncMock(side_effect=_ainvoke)
+        return fake
+
     mocker.patch(
         "harness_stata.nodes.data_cleaning.build_react_subgraph",
-        return_value=fake_subgraph,
+        side_effect=_fake_build,
     )
-    return fake_subgraph
 
 
 def _make_session_layout(tmp_path: Path) -> tuple[Path, Path]:
@@ -50,18 +68,24 @@ def _make_session_layout(tmp_path: Path) -> tuple[Path, Path]:
     return session_dir, task_dir
 
 
-def _make_downloaded_file(path: Path) -> DownloadedFile:
+def _make_downloaded_file(
+    path: Path, source_table: str = "FS_COMBAS"
+) -> DownloadedFile:
     return {
         "path": str(path),
-        "source_table": "FS_COMBAS",
+        "source_table": source_table,
         "key_fields": ["stkcd", "year"],
         "variable_names": ["ROA"],
     }
 
 
-def _write_source_csv(task_dir: Path, name: str = "data.csv") -> Path:
-    src = task_dir / name
-    src.write_text("stkcd,year,col\n1,2020,0.1\n", encoding="utf-8")
+def _write_panel_csv(
+    dir_: Path,
+    name: str,
+    rows: list[dict[str, Any]],
+) -> Path:
+    src = dir_ / name
+    pd.DataFrame(rows).to_csv(src, index=False, encoding="utf-8")
     return src
 
 
@@ -76,6 +100,15 @@ def _run(state: WorkflowState) -> dict[str, Any]:
     return asyncio.run(data_cleaning(state))
 
 
+def _default_rows() -> list[dict[str, Any]]:
+    return [
+        {"stkcd": 1, "year": 2020, "roa": 0.1, "digital": 0.5, "size": 10.0},
+        {"stkcd": 2, "year": 2021, "roa": 0.2, "digital": 0.6, "size": 11.0},
+        {"stkcd": 3, "year": 2020, "roa": 0.3, "digital": 0.7, "size": 12.0},
+        {"stkcd": 4, "year": 2021, "roa": 0.4, "digital": 0.8, "size": 13.0},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Success paths
 # ---------------------------------------------------------------------------
@@ -87,30 +120,25 @@ def test_data_cleaning_success_single_table(
     make_empirical_spec: Callable[..., EmpiricalSpec],
 ) -> None:
     session_dir, task_dir = _make_session_layout(tmp_path)
-    src = _write_source_csv(task_dir)
-    output_path = session_dir / "merged.csv"
-    pd.DataFrame(
-        {
-            "stkcd": [1, 2, 3, 4],
-            "year": [2020, 2021, 2020, 2021],
-            "roa": [0.1, 0.2, 0.3, 0.4],
-            "digital": [0.5, 0.6, 0.7, 0.8],
-            "size": [10.0, 11.0, 12.0, 13.0],
-        }
-    ).to_csv(output_path, index=False)
+    src = _write_panel_csv(task_dir, "data.csv", _default_rows())
     _patch_subgraph(
         mocker,
-        final_content=json.dumps({"file_path": str(output_path), "primary_key": ["stkcd", "year"]}),
+        sqls=["CREATE VIEW merged AS SELECT * FROM src_FS_COMBAS"],
+        final_content=json.dumps(
+            {"final_view": "merged", "primary_key": ["stkcd", "year"]}
+        ),
     )
 
     state = _base_state(make_empirical_spec(), [_make_downloaded_file(src)])
     out = _run(state)
 
     merged = out["merged_dataset"]
-    assert merged["file_path"] == str(output_path)
+    assert merged["file_path"] == str(session_dir / "merged.csv")
     assert merged["row_count"] == 4
     assert set(merged["columns"]) == {"stkcd", "year", "roa", "digital", "size"}
     assert merged["warnings"] == []
+    # Merged file actually exists on disk
+    assert Path(merged["file_path"]).exists()
 
 
 def test_data_cleaning_success_multi_source_files(
@@ -120,33 +148,82 @@ def test_data_cleaning_success_multi_source_files(
 ) -> None:
     """Output path derives from first DownloadedFile regardless of extra sources."""
     session_dir, task_dir = _make_session_layout(tmp_path)
-    src1 = _write_source_csv(task_dir, "fs_combas.csv")
+    src1 = _write_panel_csv(
+        task_dir,
+        "fs_combas.csv",
+        [
+            {"stkcd": 1, "year": 2020, "roa": 0.1, "size": 10.0},
+            {"stkcd": 2, "year": 2021, "roa": 0.2, "size": 11.0},
+            {"stkcd": 3, "year": 2020, "roa": 0.3, "size": 12.0},
+        ],
+    )
     task_dir2 = session_dir / "CSMAR_DIG_TRANSFORM"
     task_dir2.mkdir()
-    src2 = task_dir2 / "dig.csv"
-    src2.write_text("stkcd,year,digital\n1,2020,0.5\n", encoding="utf-8")
-
-    output_path = session_dir / "merged.csv"
-    pd.DataFrame(
-        {
-            "stkcd": [1, 2, 3],
-            "year": [2020, 2021, 2020],
-            "roa": [0.1, 0.2, 0.3],
-            "digital": [0.5, 0.6, 0.7],
-            "size": [10.0, 11.0, 12.0],
-        }
-    ).to_csv(output_path, index=False)
+    src2 = _write_panel_csv(
+        task_dir2,
+        "dig.csv",
+        [
+            {"stkcd": 1, "year": 2020, "digital": 0.5},
+            {"stkcd": 2, "year": 2021, "digital": 0.6},
+            {"stkcd": 3, "year": 2020, "digital": 0.7},
+        ],
+    )
     _patch_subgraph(
         mocker,
-        final_content=json.dumps({"file_path": str(output_path), "primary_key": ["stkcd", "year"]}),
+        sqls=[
+            (
+                "CREATE VIEW merged AS "
+                "SELECT a.stkcd, a.year, a.roa, a.size, b.digital "
+                "FROM src_FS_COMBAS a JOIN src_DIG_TRANSFORM b USING (stkcd, year)"
+            )
+        ],
+        final_content=json.dumps(
+            {"final_view": "merged", "primary_key": ["stkcd", "year"]}
+        ),
     )
 
-    files = [_make_downloaded_file(src1), _make_downloaded_file(src2)]
+    files = [
+        _make_downloaded_file(src1, "FS_COMBAS"),
+        _make_downloaded_file(src2, "DIG_TRANSFORM"),
+    ]
     state = _base_state(make_empirical_spec(), files)
     out = _run(state)
 
     assert out["merged_dataset"]["row_count"] == 3
     assert out["merged_dataset"]["warnings"] == []
+
+
+def test_data_cleaning_dumps_intermediate_views_including_failures(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    make_empirical_spec: Callable[..., EmpiricalSpec],
+) -> None:
+    """All non-src_ relations dump to _stage/, including views kept around from
+    earlier failed attempts."""
+    session_dir, task_dir = _make_session_layout(tmp_path)
+    src = _write_panel_csv(task_dir, "data.csv", _default_rows())
+    _patch_subgraph(
+        mocker,
+        sqls=[
+            # a "tmp" view the LLM tried first and didn't drop
+            "CREATE VIEW tmp_failed_attempt AS SELECT stkcd FROM src_FS_COMBAS",
+            "CREATE VIEW clean_combas AS SELECT * FROM src_FS_COMBAS",
+            "CREATE VIEW merged AS SELECT * FROM clean_combas",
+        ],
+        final_content=json.dumps(
+            {"final_view": "merged", "primary_key": ["stkcd", "year"]}
+        ),
+    )
+
+    state = _base_state(make_empirical_spec(), [_make_downloaded_file(src)])
+    _run(state)
+
+    stage_dir = session_dir / "_stage"
+    dumped = {p.name for p in stage_dir.iterdir()}
+    # All three non-src relations must be dumped (including the failed attempt)
+    assert dumped == {"tmp_failed_attempt.csv", "clean_combas.csv", "merged.csv"}
+    # No src_ views should leak into _stage
+    assert not any(name.startswith("src_") for name in dumped)
 
 
 def test_data_cleaning_coverage_and_missing_column_warn(
@@ -156,20 +233,23 @@ def test_data_cleaning_coverage_and_missing_column_warn(
 ) -> None:
     """Soft failures surface in warnings and do not raise."""
     session_dir, task_dir = _make_session_layout(tmp_path)
-    src = _write_source_csv(task_dir)
-    output_path = session_dir / "merged.csv"
     # roa: 50% non-null -> coverage warning; size column absent -> missing warning.
-    pd.DataFrame(
-        {
-            "stkcd": [1, 2, 3, 4],
-            "year": [2020, 2021, 2020, 2021],
-            "roa": [0.1, 0.2, math.nan, math.nan],
-            "digital": [0.5, 0.6, 0.7, 0.8],
-        }
-    ).to_csv(output_path, index=False)
+    src = _write_panel_csv(
+        task_dir,
+        "data.csv",
+        [
+            {"stkcd": 1, "year": 2020, "roa": 0.1, "digital": 0.5},
+            {"stkcd": 2, "year": 2021, "roa": 0.2, "digital": 0.6},
+            {"stkcd": 3, "year": 2020, "roa": None, "digital": 0.7},
+            {"stkcd": 4, "year": 2021, "roa": None, "digital": 0.8},
+        ],
+    )
     _patch_subgraph(
         mocker,
-        final_content=json.dumps({"file_path": str(output_path), "primary_key": ["stkcd", "year"]}),
+        sqls=["CREATE VIEW merged AS SELECT * FROM src_FS_COMBAS"],
+        final_content=json.dumps(
+            {"final_view": "merged", "primary_key": ["stkcd", "year"]}
+        ),
     )
 
     state = _base_state(make_empirical_spec(), [_make_downloaded_file(src)])
@@ -179,6 +259,7 @@ def test_data_cleaning_coverage_and_missing_column_warn(
     assert len(warnings) == 2
     assert any("'ROA'" in w and "coverage" in w for w in warnings)
     assert any("'SIZE'" in w and "not found" in w for w in warnings)
+    assert Path(session_dir / "merged.csv").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -191,23 +272,67 @@ def test_data_cleaning_duplicate_primary_key_raises(
     tmp_path: Path,
     make_empirical_spec: Callable[..., EmpiricalSpec],
 ) -> None:
-    session_dir, task_dir = _make_session_layout(tmp_path)
-    src = _write_source_csv(task_dir)
-    output_path = session_dir / "merged.csv"
-    pd.DataFrame(
-        {
-            "stkcd": [1, 1, 2, 2],
-            "year": [2020, 2020, 2021, 2021],
-            "roa": [0.1, 0.2, 0.3, 0.4],
-        }
-    ).to_csv(output_path, index=False)
+    _, task_dir = _make_session_layout(tmp_path)
+    src = _write_panel_csv(
+        task_dir,
+        "data.csv",
+        [
+            {"stkcd": 1, "year": 2020, "roa": 0.1},
+            {"stkcd": 1, "year": 2020, "roa": 0.2},  # dup primary key
+            {"stkcd": 2, "year": 2021, "roa": 0.3},
+        ],
+    )
     _patch_subgraph(
         mocker,
-        final_content=json.dumps({"file_path": str(output_path), "primary_key": ["stkcd", "year"]}),
+        sqls=["CREATE VIEW merged AS SELECT * FROM src_FS_COMBAS"],
+        final_content=json.dumps(
+            {"final_view": "merged", "primary_key": ["stkcd", "year"]}
+        ),
     )
 
     state = _base_state(make_empirical_spec(), [_make_downloaded_file(src)])
     with pytest.raises(RuntimeError, match="duplicate"):
+        _run(state)
+
+
+def test_data_cleaning_final_view_missing_raises(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    make_empirical_spec: Callable[..., EmpiricalSpec],
+) -> None:
+    """LLM declares a final_view that was never created -> RuntimeError."""
+    _, task_dir = _make_session_layout(tmp_path)
+    src = _write_panel_csv(task_dir, "data.csv", _default_rows())
+    _patch_subgraph(
+        mocker,
+        sqls=["CREATE VIEW clean_combas AS SELECT * FROM src_FS_COMBAS"],
+        final_content=json.dumps(
+            {"final_view": "nonexistent_view", "primary_key": ["stkcd", "year"]}
+        ),
+    )
+
+    state = _base_state(make_empirical_spec(), [_make_downloaded_file(src)])
+    with pytest.raises(RuntimeError, match="final_view.*not found"):
+        _run(state)
+
+
+def test_data_cleaning_final_view_illegal_identifier_raises(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    make_empirical_spec: Callable[..., EmpiricalSpec],
+) -> None:
+    """Non-identifier final_view name -> RuntimeError (defense against injection)."""
+    _, task_dir = _make_session_layout(tmp_path)
+    src = _write_panel_csv(task_dir, "data.csv", _default_rows())
+    _patch_subgraph(
+        mocker,
+        sqls=["CREATE VIEW merged AS SELECT * FROM src_FS_COMBAS"],
+        final_content=json.dumps(
+            {"final_view": "merged; DROP TABLE x", "primary_key": ["stkcd", "year"]}
+        ),
+    )
+    state = _base_state(make_empirical_spec(), [_make_downloaded_file(src)])
+    with pytest.raises(RuntimeError, match="legal SQL identifier"):
         _run(state)
 
 
@@ -218,14 +343,15 @@ def test_data_cleaning_react_truncation_raises(
 ) -> None:
     """Final AIMessage with non-empty tool_calls = max_iterations hit."""
     _, task_dir = _make_session_layout(tmp_path)
-    src = _write_source_csv(task_dir)
+    src = _write_panel_csv(task_dir, "data.csv", _default_rows())
     _patch_subgraph(
         mocker,
+        sqls=(),
         final_content="",
         tool_calls=[
             {
-                "name": "run_python",
-                "args": {"code": "print('not done')"},
+                "name": "run_sql",
+                "args": {"query": "SELECT 1"},
                 "id": "call_1",
                 "type": "tool_call",
             }
@@ -234,6 +360,35 @@ def test_data_cleaning_react_truncation_raises(
 
     state = _base_state(make_empirical_spec(), [_make_downloaded_file(src)])
     with pytest.raises(RuntimeError, match="max_iterations"):
+        _run(state)
+
+
+def test_data_cleaning_illegal_source_table_raises(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    make_empirical_spec: Callable[..., EmpiricalSpec],
+) -> None:
+    """source_table with non-identifier characters -> RuntimeError before LLM runs."""
+    _, task_dir = _make_session_layout(tmp_path)
+    src = _write_panel_csv(task_dir, "data.csv", _default_rows())
+    # No need to patch subgraph: failure happens during _register_sources.
+    file_ = _make_downloaded_file(src, source_table="FS; DROP TABLE x")
+    state = _base_state(make_empirical_spec(), [file_])
+    with pytest.raises(RuntimeError, match="illegal source_table"):
+        _run(state)
+
+
+def test_data_cleaning_xlsx_source_raises_not_implemented(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    make_empirical_spec: Callable[..., EmpiricalSpec],
+) -> None:
+    """xlsx is reserved for a future phase and must raise NotImplementedError."""
+    _, task_dir = _make_session_layout(tmp_path)
+    xlsx = task_dir / "data.xlsx"
+    xlsx.write_bytes(b"not-a-real-xlsx")
+    state = _base_state(make_empirical_spec(), [_make_downloaded_file(xlsx)])
+    with pytest.raises(NotImplementedError, match="xlsx"):
         _run(state)
 
 

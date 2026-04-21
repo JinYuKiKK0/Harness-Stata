@@ -28,6 +28,7 @@ class Settings:
     stata_edition: str
     downloads_root: Path
     per_variable_max_calls: int
+    cleaning_coverage_threshold: float
 
 
 def _load_env() -> dict[str, str]:
@@ -80,6 +81,19 @@ def get_settings() -> Settings:
         )
         raise RuntimeError(msg)
 
+    coverage_raw = env.get("HARNESS_CLEANING_COVERAGE_THRESHOLD", "0.8")
+    try:
+        cleaning_coverage_threshold = float(coverage_raw)
+    except ValueError as exc:
+        msg = (
+            f"HARNESS_CLEANING_COVERAGE_THRESHOLD={coverage_raw!r} 必须是浮点数。"
+            " 请在项目根 .env 中修正取值。"
+        )
+        raise RuntimeError(msg) from exc
+    if not 0 < cleaning_coverage_threshold <= 1:
+        msg = f"HARNESS_CLEANING_COVERAGE_THRESHOLD={cleaning_coverage_threshold} 必须落在 (0, 1] 区间内。"
+        raise RuntimeError(msg)
+
     return Settings(
         dashscope_api_key=api_key,
         llm_model_name=env.get("LLM_MODEL", "qwen-plus"),
@@ -90,4 +104,5 @@ def get_settings() -> Settings:
         stata_edition=env.get("STATA_EXECUTOR_EDITION", "mp"),
         downloads_root=downloads_root,
         per_variable_max_calls=per_variable_max_calls,
+        cleaning_coverage_threshold=cleaning_coverage_threshold,
     )

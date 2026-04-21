@@ -2,15 +2,33 @@
 
 ## 当前焦点
 
-F26 — data_probe 子图启动时一次性预拉 csmar_list_databases 并注入 ProbeState,消除每个变量 ReAct 重复调用 list_databases 的预算浪费。同时在 CLAUDE.md 技术栈段记录两条战略决策:LangGraph SqliteSaver (MVP) → PostgresSaver (Web) 和 DuckDB 作为数据清洗引擎 (后续 data_cleaning 重构的方向)。
+F20 — data_cleaning 节点从 pandas REPL 重构为 DuckDB SQL-first：LLM 不再裸写 pandas，而是对预注册的 `src_<source_table>` 视图写 SQL；节点 deterministic 导出 final_view 并自动 dump 所有中间 view 到 `_stage/` 供调试。
 
-MVP 前 25 个 feature (F01-F25) 已 `passes=true`。
+MVP 前 25 个 feature (F01-F25) 已 `passes=true`；F26（probe list_databases 预拉）与本次 F20 重构均已过 9/9 质量门禁。
 
 ## 当前上下文
 
-<!-- 每个会话覆盖此部分。保持简洁。 -->
+<!-- 每次任务完成覆写此部分。保持简洁。 -->
 
-- 本次会话 bug fix — probe 子图 ReAct 上下文补充时间范围:
+- 本次会话重构 — F20 数据清洗节点改用 DuckDB SQL：
+  - 动机：DataFrame 命令式清洗心智负担重、中间态无名难审计；换成 SQL + 命名 VIEW 后每一步都是可查询的声明式中间态。
+  - 架构决策：
+    - **D1 底座**：DuckDB 内存连接（`duckdb>=1.1.0`），源 CSV 走 `conn.read_csv(path).create_view(src_<source_table>)` 预注册；终产物由 node `conn.sql('SELECT * FROM "<final_view>"').write_csv(...)` 导出（路径不拼 SQL）。
+    - **D2 工具粒度**：单一 `run_sql(query)`；SELECT/DESCRIBE 返回前 20 行 + 总行数，DDL/DML/SET 折叠为 "OK"，错误返回 "ERROR: ..." 字符串（不抛异常，由 ReAct 自行修复）。
+    - **D3 预注入**：HumanMessage 中附 schema + 3 行样本，省掉 LLM 摸底回合。
+    - **D4 契约变更**：终态 JSON 从 `{file_path, primary_key}` 改为 `{final_view, primary_key}`；LLM 只声明 view，COPY 由 node 执行。
+    - **D5 中间产物**：node 在最终导出前扫描 main schema 下非 `src_` 前缀的所有 tables/views，best-effort dump 到 `<session>/_stage/<name>.csv`（含失败尝试），开发期调试用。
+    - **D6 注入防御**：`_IDENT_RE = ^[A-Za-z_][A-Za-z0-9_]*$` 白名单校验 `source_table` 与 `final_view`；路径通过 DuckDB Python relation API 传入，不拼 SQL；`information_schema` 查询用 `?` 参数化。
+    - **D7 xlsx 预占**：`_register_sources` 按 suffix 分支，`.xlsx/.xls` 本期 `NotImplementedError`。
+  - 变更：
+    - `src/harness_stata/nodes/data_cleaning.py`：重写为 DuckDB 版本，docstring 全中文。
+    - `src/harness_stata/prompts/data_cleaning.md`：重写为 DuckDB SQL 数据工程师角色 + 新终态契约。
+    - `src/harness_stata/config.py`：`Settings` 新增 `cleaning_coverage_threshold: float`，读 `.env` 的 `HARNESS_CLEANING_COVERAGE_THRESHOLD`（默认 0.8，边界 (0, 1]）。
+    - `pyproject.toml`：加 `duckdb>=1.1.0`；`[tool.ruff.lint]` 忽略 `RUF001/RUF002/RUF003`（中文 docstring/注释里的全角标点为预期用法）。
+    - `tests/nodes/test_data_cleaning.py`：fake subgraph 改为真实调用 `run_sql` 执行测试预设 SQL；新增中间产物 dump / final_view 缺失 / 非法 identifier / 非法 source_table / xlsx NotImplementedError 等测试。
+  - 质量门禁 9/9 通过。
+
+- 既往会话 bug fix — probe 子图 ReAct 上下文补充时间范围:
   - 根因:`_variable_react` 的 HumanMessage 仅携带变量定义 + 已购库清单,丢失 EmpiricalSpec 的
     `time_range_start` / `time_range_end` / `data_frequency` / `sample_scope`;Agent 调 csmar-mcp
     的 probe_query / 样本拉取类工具时不会传时间过滤,无法正确判断"目标时间范围下是否可得"
@@ -36,50 +54,6 @@ MVP 前 25 个 feature (F01-F25) 已 `passes=true`。
     - **D3 字段类型**:`available_databases: str` 原始工具输出字符串(YAGNI,不做 JSON 解析;LLM 能直接读)
     - **D4 工具过滤**:caller 过滤 + subgraph 防御性再过滤(双保险)
     - **D5 失败语义**:list_databases 调用失败直接 RuntimeError(CSMAR 不可达时降级无意义)
-- 先前 bug fix:
-  - `src/harness_stata/prompts/model_construction.md`:删除"用 Y/X/Z 占位符, 无需替换具体变量名"条款;改写"数学方程式"小节为 LaTeX 硬约束 (`$$...$$` 包裹、`\alpha` / `\beta_1` / `\gamma_k` / `\sum_{k=1}^{n}` / `\mu_i` / `\delta_t` / `\varepsilon_{i,t}`、下标 `_{i,t}`);5 类模型示例全部重写成 LaTeX 源码,并示范 dependent/independent 变量名代入、控制变量用向量形式
-  - `src/harness_stata/nodes/model_construction.py`:`_ModelPlanModel.equation` Field description 同步加 LaTeX 硬约束,with_structured_output 会把该 description 注入 tool schema
-  - `src/harness_stata/subgraphs/generic_react.py`:`_agent` / `_tool_executor` 改 async def,`model.invoke` → `await model.ainvoke`,`tool_obj.invoke` → `await tool_obj.ainvoke`
-  - `src/harness_stata/subgraphs/probe_subgraph.py`:`_variable_react` / `_result_handler` / `_extract_finding` 改 async def,所有 LLM 与 tool 调用改用 ainvoke
-  - `src/harness_stata/nodes/data_probe.py`:`subgraph.invoke` → `await subgraph.ainvoke`;docstring 更新为 "async 全链路"
-  - 测试:`tests/subgraphs/test_generic_react.py` / `test_probe_subgraph.py` / `tests/nodes/test_data_probe.py` 的 mock 由 `MagicMock.invoke` 改为 `AsyncMock` 绑定的 `ainvoke`;子图单测调用改为 `asyncio.run(graph.ainvoke(...))` (LangGraph 同步 `.invoke()` 不允许纯 async 节点,会抛 "No synchronous function provided")
-  - 质量门禁 9/9 通过 (pytest 102 passed 保持)
-- F24 完成:
-  - `src/harness_stata/cli.py` (~215 行):
-    - 单命令 `run`,6 个必填 `--option` 直接映射 `UserRequest`;`data_frequency` 用 `StrEnum` 让 typer 自动做 choice 校验 (yearly/quarterly/monthly/daily)
-    - `--thread-id` 可选,缺省 `uuid4()`,便于调试重跑
-    - `@app.callback()` 占位,把单命令 app 升级为多命令 app 以便保留 `run` 子命令名 (测试/调用方都写 `harness-stata run ...`)
-    - `_drive_graph` async 驱动循环:`await graph.ainvoke(initial, config)` → 若返回 `{"__interrupt__": [Interrupt(value=...)]}` → `_prompt_hitl_decision` 阻塞 typer.confirm/prompt → `await graph.ainvoke(Command(resume=decision), config)` 续图 → 循环直至 payload 为空 → `aget_state(config).values` 取终态
-    - `_interrupt_payload(result)` 从 `Interrupt.value` 解出 dict payload (经 `getattr + isinstance` 收敛 pyright unknown)
-    - `_prompt_hitl_decision`:approved 时 optional notes (Enter 跳过 → None);rejected 时 while 循环强制非空 rejection reason
-    - `_render_summary` 按 workflow_status 三分支打印 (success/failed_hard_contract/rejected),success 同时列 merged/desc/regression 的 do+log 路径
-    - `_dump_final_state`:从 `merged_dataset.file_path` 推 session_dir → 写 `final_state.json` (json.dumps ensure_ascii=False, default=str);hard_failure/rejected 无 session_dir 时返回 None (不落盘,仅 stdout)
-    - exit code:success → 0;failed_hard_contract/rejected → 1;参数缺失/枚举错误 → 2 (typer 原生)
-  - `src/harness_stata/__main__.py` (6 行):支持 `python -m harness_stata run ...`;纯委托 `cli.app`
-  - `pyproject.toml`:
-    - 新增 `[tool.ruff.lint.flake8-bugbear] extend-immutable-calls = ["typer.Option", "typer.Argument"]` 以豁免 B008 (typer 惯用在默认值位置调 Option)
-    - `[project.scripts] harness-stata = "harness_stata.cli:app"` 之前已就位
-  - `CLAUDE.md` 架构树追加 `__main__.py` 节点,通过 `check_architecture` 一致性检查
-  - `tests/test_cli.py` (7 用例全过):
-    - happy path approved:stub 全部 7 个非 hitl 节点 + 真跑 hitl (真实 interrupt 触发),CliRunner input="y\n\n",断言 exit 0 + stdout 含 regression summary + final_state.json 落盘
-    - hard failure short-circuits:data_probe stub 返回 `workflow_status="failed_hard_contract"`,断言 data_cleaning 未被调用 (条件边生效)
-    - hitl rejected:CliRunner input="n\n模型假设不合理\n",断言 exit 1 + stdout 含 rejection notes + data_cleaning 未被调用
-    - missing required arg:缺 --x-variable → exit 2,typer 报 Missing option
-    - invalid data_frequency:--data-frequency weekly → exit 2
-    - _interrupt_payload 纯函数用例 (空 dict / 无 key / Interrupt 对象 3 种输入)
-    - _dump_final_state 无 merged_dataset 时返回 None
-  - 设计取舍:
-    - **D1 输入**:全 typer 命令行参数 (拒绝 prompt/config 文件,MVP 最简)
-    - **D2 HITL**:同进程阻塞 typer.confirm/prompt;InMemorySaver 够用,无需跨进程
-    - **D3 测试 mock 粒度**:节点级 stub 7 个非 hitl 节点,hitl 真跑以验证 CLI 的 interrupt/resume 循环契约
-    - **D4 产物**:stdout 摘要 + session_dir/final_state.json 快照 (hard_failure/rejected 无 merged_dataset 时仅 stdout)
-  - pyright strict 处理:
-    - graph.ainvoke / aget_state `# pyright: ignore[reportUnknownMemberType]`
-    - `state.get(...)` 返回的 dict 值显式标注 `dict[str, Any]` 收敛 "partially unknown"
-    - `data_frequency.value` 赋给 Literal 字段加 `# pyright: ignore[reportAssignmentType]`
-    - `_main` callback 加 `# pyright: ignore[reportUnusedFunction]`
-- 质量门禁 9/9 通过 (pytest 102 passed: 原 95 + CLI 7)
-- 先前 F23 / F22 / F21 / F20 完成内容见 git log 8c291c5 / c899a3b / 089a78a / 857d865
 
 ## 下一步
 
@@ -96,12 +70,11 @@ MVP 前 25 个 feature (F01-F25) 已 `passes=true`。
 - langgraph 1.1.6 缺少公开类型桩, `StateGraph.add_node` / `.add_edge` / `.compile()`, `BaseChatModel.bind_tools()` / `.with_structured_output()`, `BaseTool.invoke()` / `.ainvoke()`, `Runnable.invoke()` / `ainvoke` / `aget_state` 被 pyright strict 判 reportUnknownMemberType, 统一通过 `# pyright: ignore[reportUnknownMemberType]` 压制
 - `@tool` 装饰器在 pyright strict 下需 `# pyright: ignore[reportUntypedFunctionDecorator, reportUnknownVariableType, reportUnknownArgumentType]` 压制
 - pandas 在 pyright strict 下大量 reportUnknownMemberType,F20 采用 `cast("Any", ...)` + `# pyright: ignore` 组合
-- ruff RUF001/RUF002 对中文全角标点与同形希腊字母的检查: docstring 与 Field description 避免使用全角标点 (逗号/句号/括号等) 与 α/β/γ
+- ruff RUF001/RUF002/RUF003 已在 pyproject 中 ignore（中文 docstring/注释采用全角标点为项目约定）；但 Field description 仍要避免同形希腊字母 α/β/γ
 - 主 `.venv` 缺 `prettytable` (csmarapi 的运行时依赖),scripts/check.py 已 9/9 通过但手动跑 csmar-mcp 子包单测会 ImportError
 - `packages/stata-executor/` 的 ruff/pyright 收口尚未做 (类比 csmar-mcp 已完成的技术债)
 - `subgraphs/probe_subgraph.py` 当前 487 行触发 check_file_size warn,下一次实质性扩展前应拆出 `_probe_helpers.py`
-- F20 `run_python` 工具直接用 `exec` + 闭包 namespace,无沙箱/子进程隔离 (MVP 本地单机可接受);服务端化需替换子进程或 Docker
-- F20 `_COVERAGE_THRESHOLD = 0.8` 硬编码,按场景调整可提到 config
+- F20 数据清洗节点已从 pandas REPL 重构为 DuckDB SQL；覆盖率阈值已提到 `Settings.cleaning_coverage_threshold`（不再硬编码）
 - F22 `actual_sign` 由 LLM 从 log 抽取,节点不 parse log;若发现 LLM 误读可改为节点端正则抽取 Stata 回归表格
 - F22/F21 要求 do 文件内部用 `log using` 显式指定绝对路径,否则节点在 `_assert_file_exists` 阶段 raise (prompt 已强制约束)
 - `scripts/check.py` 的 ruff format 仅检查 `src/harness_stata`,不覆盖 `tests/` 与 `scripts/`,导致测试代码可能存在格式漂移

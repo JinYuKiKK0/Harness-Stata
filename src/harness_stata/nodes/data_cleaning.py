@@ -1,28 +1,31 @@
-"""Data cleaning node (F20) -- sixth node in the workflow.
+"""数据清洗节点（F20）——工作流第六个节点。
 
-ReAct-driven. Consumes DownloadedFiles (F18) + EmpiricalSpec (F09), binds one
-persistent-namespace Python REPL tool to the generic ReAct subgraph (F19),
-lets the LLM do cross-table join / wide->long / snake_case renaming, then
-enforces post-conditions and writes ``merged_dataset``.
+基于 ReAct，底座改用 DuckDB。消费 DownloadedFiles（F18）与
+EmpiricalSpec（F09），打开一个内存 DuckDB 连接，把每份下载的 CSV 预先
+注册为 ``src_<source_table>`` 视图；绑定唯一的 ``run_sql`` 工具给通用
+ReAct 子图（F19），由 LLM 写 SQL 完成清洗/连接/宽长转换，然后由本节点
+执行后置校验并写入 ``merged_dataset``。
 
-Tiered failure: primary-key duplication or ReAct truncation -> RuntimeError;
-variable coverage below ``_COVERAGE_THRESHOLD`` -> ``MergedDataset.warnings``.
+失败分层：主键重复、final_view 缺失、ReAct 超轮截断 -> RuntimeError；
+变量覆盖率低于 ``Settings.cleaning_coverage_threshold`` -> 仅进入
+``MergedDataset.warnings``。
 """
 
 from __future__ import annotations
 
-import contextlib
-import io
 import json
+import logging
 import re
-import traceback
 from pathlib import Path
 from typing import Any, cast
 
+import duckdb
 import pandas as pd
+from duckdb import DuckDBPyConnection
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool, tool  # pyright: ignore[reportUnknownVariableType]
 
+from harness_stata.config import get_settings
 from harness_stata.nodes._writes import awrites_to
 from harness_stata.prompts import load_prompt
 from harness_stata.state import (
@@ -34,35 +37,19 @@ from harness_stata.state import (
 )
 from harness_stata.subgraphs.generic_react import ReactState, build_react_subgraph
 
+_LOGGER = logging.getLogger(__name__)
+
 _MAX_ITERATIONS = 30
 _MERGED_FILENAME = "merged.csv"
-_COVERAGE_THRESHOLD = 0.8
+_STAGE_DIRNAME = "_stage"
+_SRC_PREFIX = "src_"
+_PREVIEW_ROWS = 20
+_SAMPLE_ROWS = 3
 _FENCE_RE = re.compile(r"^```(?:json)?\s*\n(.*?)\n```\s*$", re.DOTALL)
-
-
-def _make_python_tool() -> BaseTool:
-    """Build a fresh ``run_python`` tool with a private persistent namespace."""
-    namespace: dict[str, Any] = {"pd": pd, "Path": Path}
-
-    @tool  # pyright: ignore[reportUntypedFunctionDecorator, reportUnknownVariableType, reportUnknownArgumentType]
-    def run_python(code: str) -> str:
-        """Execute Python in a persistent namespace pre-loaded with pd and Path.
-
-        State persists across calls within one node invocation. Use ``print``
-        to surface values; returns captured stdout or ``ERROR: ...`` on raise.
-        """
-        stdout_buffer = io.StringIO()
-        try:
-            with contextlib.redirect_stdout(stdout_buffer):
-                exec(code, namespace)
-        except Exception as exc:
-            captured = stdout_buffer.getvalue()
-            tb = "".join(traceback.format_exception_only(type(exc), exc))
-            return f"{captured}ERROR: {tb}".strip()
-        captured = stdout_buffer.getvalue()
-        return captured if captured else "(no output)"
-
-    return run_python
+# 严格的 SQL 标识符白名单：ASCII 字母/数字/下划线，且不以数字开头。
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# DuckDB 对 DDL/DML/SET 会返回 0~1 行的 'Count' 或 'Success' 元信息列。
+_META_RESULT_COLUMNS = frozenset({"Count", "Success"})
 
 
 def _validate(state: WorkflowState) -> str | None:
@@ -75,11 +62,11 @@ def _validate(state: WorkflowState) -> str | None:
 
 
 def _derive_output_path(files: list[DownloadedFile]) -> Path:
-    """Place merged CSV alongside F18's session dir: ``<session>/merged.csv``.
+    """把合并产物放在 F18 的会话目录下：``<session>/merged.csv``。
 
-    ``files[*].path`` is guaranteed absolute by F18 (download node), so we do
-    not call ``Path.resolve()`` — on Windows that would hit ``os.getcwd()``
-    inside the event loop and trigger blockbuster under ``langgraph dev``.
+    ``files[*].path`` 已由 F18 保证为绝对路径，此处刻意不调用
+    ``Path.resolve()``——Windows 下 resolve 会在事件循环里触发
+    ``os.getcwd()``，被 ``langgraph dev`` 的 blockbuster 拦截。
     """
     first = Path(files[0]["path"])
     return first.parents[1] / _MERGED_FILENAME
@@ -91,17 +78,84 @@ def _format_variables(variables: list[VariableDefinition]) -> str:
     )
 
 
-def _format_files(files: list[DownloadedFile]) -> str:
-    return "\n".join(
-        f"{i}. path={f['path']}\n"
-        f"   source_table={f['source_table']}\n"
-        f"   key_fields={f['key_fields']}\n"
-        f"   variable_names={f['variable_names']}"
-        for i, f in enumerate(files, start=1)
-    )
+def _register_sources(conn: DuckDBPyConnection, files: list[DownloadedFile]) -> list[str]:
+    """把每个下载文件注册为 ``src_<source_table>`` 视图。
+
+    视图落在 ``main`` schema。``source_table`` 必须先通过 :data:`_IDENT_RE`
+    白名单校验，才能进入 SQL 标识符位置拼接。文件路径通过 DuckDB Python
+    relation API（``conn.read_csv``）传入，避免任何字符串级 SQL 拼接。
+
+    返回按输入顺序排列的视图名列表。
+    """
+    view_names: list[str] = []
+    for f in files:
+        source_table = f["source_table"]
+        if not _IDENT_RE.match(source_table):
+            msg = (
+                f"data_cleaning: illegal source_table {source_table!r};"
+                f" must match {_IDENT_RE.pattern}"
+            )
+            raise RuntimeError(msg)
+        view_name = f"{_SRC_PREFIX}{source_table}"
+        path = Path(f["path"])
+        suffix = path.suffix.lower()
+        if suffix == ".csv":
+            rel = conn.read_csv(str(path))
+        elif suffix in (".xlsx", ".xls"):
+            msg = (
+                f"data_cleaning: xlsx support deferred; upstream must emit CSV for MVP"
+                f" (got {path.name})"
+            )
+            raise NotImplementedError(msg)
+        else:
+            msg = f"data_cleaning: unsupported source format {suffix!r} for {path.name}"
+            raise ValueError(msg)
+        conn.execute(f'DROP VIEW IF EXISTS "{view_name}"')
+        rel.create_view(view_name)
+        view_names.append(view_name)
+    return view_names
 
 
-def _build_human_prompt(spec: EmpiricalSpec, files: list[DownloadedFile], output_path: Path) -> str:
+def _probe_sources_for_prompt(
+    conn: DuckDBPyConnection,
+    files: list[DownloadedFile],
+    view_names: list[str],
+) -> list[str]:
+    """为每个已注册视图采集 schema + 前 3 行样本，拼成可注入 HumanMessage 的描述块。
+
+    提前把 schema 与样本注入 prompt，可以把 LLM 原本花在 DESCRIBE/SELECT LIMIT
+    上的若干 ReAct 回合省掉，直接进入写清洗 SQL 的阶段。
+    """
+    blocks: list[str] = []
+    for i, (f, view_name) in enumerate(zip(files, view_names, strict=True), start=1):
+        schema_df = conn.execute(f'DESCRIBE "{view_name}"').fetchdf()
+        schema_lines = [
+            f"     - {row['column_name']}: {row['column_type']}" for _, row in schema_df.iterrows()
+        ]
+        sample_df = conn.execute(f'SELECT * FROM "{view_name}" LIMIT {_SAMPLE_ROWS}').fetchdf()
+        sample_txt = (
+            sample_df.to_string(index=False)  # pyright: ignore[reportUnknownMemberType]
+            if len(sample_df) > 0
+            else "(empty table)"
+        )
+        block = (
+            f"{i}. path={f['path']}\n"
+            f"   source_table={f['source_table']}  (registered view: {view_name})\n"
+            f"   key_fields={f['key_fields']}\n"
+            f"   variable_names={f['variable_names']}\n"
+            f"   schema:\n"
+            + "\n".join(schema_lines)
+            + f"\n   sample (first {_SAMPLE_ROWS} rows):\n{sample_txt}"
+        )
+        blocks.append(block)
+    return blocks
+
+
+def _build_human_prompt(
+    spec: EmpiricalSpec,
+    source_blocks: list[str],
+    output_path: Path,
+) -> str:
     return (
         f"## topic\n{spec['topic']}\n\n"
         f"## analysis_granularity\n{spec['analysis_granularity']}\n\n"
@@ -111,11 +165,114 @@ def _build_human_prompt(spec: EmpiricalSpec, files: list[DownloadedFile], output
         f"data_frequency: {spec['data_frequency']}\n\n"
         f"## variables (EmpiricalSpec.variables)\n"
         f"{_format_variables(spec['variables'])}\n\n"
-        f"## source CSV files\n{_format_files(files)}\n\n"
-        f"## output_path\n{output_path}\n\n"
-        "Merge the above source CSVs into one long-format CSV saved at"
-        " output_path, then emit the terminating JSON as specified."
+        f"## pre-registered source views\n" + "\n\n".join(source_blocks) + "\n\n"
+        f"## output_path (node will export final_view here; do NOT COPY yourself)\n"
+        f"{output_path}\n\n"
+        "Build a single long-format view/table that merges the sources, then emit"
+        " the terminating JSON {final_view, primary_key}."
     )
+
+
+def _format_query_result(df: pd.DataFrame) -> str:
+    """把 DuckDB 结果 DataFrame 渲染成供 LLM 阅读的预览字符串。"""
+    total = len(df)
+    cols = cast("list[Any]", list(df.columns))
+    # DuckDB 对 DDL/DML/SET 会返回 0~1 行的 'Count'/'Success' 元结果。
+    # 折叠成 "OK"，避免给 LLM 塞进误导性的元行。
+    if len(cols) == 1 and cols[0] in _META_RESULT_COLUMNS:
+        if total == 0:
+            return "OK"
+        return f"OK (affected rows: {int(cast('Any', df.iat[0, 0]))})"
+    if total == 0:
+        return "(no rows)"
+    preview = df.head(_PREVIEW_ROWS).to_string(index=False)  # pyright: ignore[reportUnknownMemberType]
+    if total <= _PREVIEW_ROWS:
+        return f"{preview}\n(total rows: {total})"
+    return f"{preview}\n... ({total - _PREVIEW_ROWS} more rows; total: {total})"
+
+
+def _make_sql_tool(conn: DuckDBPyConnection) -> BaseTool:
+    """构建一个绑定到给定 DuckDB 连接的 ``run_sql`` 工具。"""
+
+    @tool  # pyright: ignore[reportUntypedFunctionDecorator, reportUnknownVariableType, reportUnknownArgumentType]
+    def run_sql(query: str) -> str:
+        """在共享的内存 DuckDB 连接上执行一条 SQL。
+
+        可直接查询的预注册视图：每份下载文件对应一个
+        ``src_<source_table>`` 视图。标准 SQL 全部可用（SELECT /
+        CREATE VIEW / CREATE TABLE / DESCRIBE 等）。
+
+        返回规则：SELECT / DESCRIBE 返回前 20 行预览 + 总行数；
+        DDL / DML / SET 折叠为 ``"OK"``（或 ``"OK (affected rows: N)"``）；
+        SQL 错误返回 ``"ERROR: <类型>: <消息>"`` 字符串，工具自身不抛异常，
+        以便 Agent 根据错误自行修正重跑。
+        """
+        try:
+            df = conn.execute(query).fetchdf()
+        except duckdb.Error as exc:
+            return f"ERROR: {type(exc).__name__}: {exc}"
+        except Exception as exc:
+            return f"ERROR: {type(exc).__name__}: {exc}"
+        return _format_query_result(df)
+
+    return run_sql
+
+
+def _list_intermediate_relations(conn: DuckDBPyConnection) -> list[str]:
+    """返回 ``main`` schema 下所有非 ``src_`` 前缀的表/视图名。"""
+    rows = conn.execute(
+        "SELECT table_name FROM information_schema.tables"
+        " WHERE table_schema = 'main' AND table_name NOT LIKE ?"
+        " ORDER BY table_name",
+        [f"{_SRC_PREFIX}%"],
+    ).fetchall()
+    return [str(r[0]) for r in rows]
+
+
+def _dump_intermediate_artifacts(conn: DuckDBPyConnection, stage_dir: Path) -> list[str]:
+    """尽力而为地把每个非 ``src_`` 关系落盘到 ``<stage_dir>/<name>.csv``。
+
+    包含 LLM CREATE 后未 DROP 的失败尝试在内的所有中间态，都会被 dump，
+    方便开发者事后调试。任何单个文件 dump 失败仅记日志、不抛异常——
+    中间产物是调试辅助，不能阻断主流程。
+    """
+    dumped: list[str] = []
+    for name in _list_intermediate_relations(conn):
+        if not _IDENT_RE.match(name):
+            _LOGGER.warning("data_cleaning: skipping dump of %r (non-identifier name)", name)
+            continue
+        dump_path = stage_dir / f"{name}.csv"
+        try:
+            conn.sql(f'SELECT * FROM "{name}"').write_csv(str(dump_path), header=True)
+        except (duckdb.Error, OSError) as exc:
+            _LOGGER.warning("data_cleaning: failed to dump intermediate %r: %s", name, exc)
+            continue
+        dumped.append(str(dump_path))
+    return dumped
+
+
+def _check_final_view_exists(conn: DuckDBPyConnection, view_name: str) -> None:
+    if not _IDENT_RE.match(view_name):
+        msg = (
+            f"data_cleaning: final_view {view_name!r} is not a legal SQL identifier"
+            f" (must match {_IDENT_RE.pattern})"
+        )
+        raise RuntimeError(msg)
+    row = conn.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_schema = 'main' AND table_name = ?",
+        [view_name],
+    ).fetchone()
+    if row is None:
+        msg = f"data_cleaning: final_view {view_name!r} not found in DuckDB connection"
+        raise RuntimeError(msg)
+
+
+def _export_final_view(conn: DuckDBPyConnection, view_name: str, output_path: Path) -> None:
+    """将 ``final_view`` 以 CSV（带表头、逗号分隔）写到 ``output_path``。
+
+    调用前 ``view_name`` 必须已通过 :func:`_check_final_view_exists` 校验。
+    """
+    conn.sql(f'SELECT * FROM "{view_name}"').write_csv(str(output_path), header=True)
 
 
 def _extract_final_json(content: str) -> dict[str, Any]:
@@ -132,6 +289,14 @@ def _extract_final_json(content: str) -> dict[str, Any]:
         msg = f"data_cleaning: final JSON must be object, got {type(obj).__name__}"
         raise RuntimeError(msg)
     return cast("dict[str, Any]", obj)
+
+
+def _extract_final_view(payload: dict[str, Any]) -> str:
+    raw = payload.get("final_view")
+    if not isinstance(raw, str) or not raw:
+        msg = "data_cleaning: final JSON must include non-empty 'final_view' string"
+        raise RuntimeError(msg)
+    return raw
 
 
 def _extract_primary_key(payload: dict[str, Any]) -> list[str]:
@@ -157,7 +322,10 @@ def _find_variable_column(var_name: str, columns: list[str]) -> str | None:
 
 
 def _check_post_conditions(
-    csv_path: Path, spec: EmpiricalSpec, primary_key: list[str]
+    csv_path: Path,
+    spec: EmpiricalSpec,
+    primary_key: list[str],
+    coverage_threshold: float,
 ) -> tuple[int, list[str], list[str]]:
     df = pd.read_csv(csv_path)  # pyright: ignore[reportUnknownMemberType]
     row_count = len(df)
@@ -189,22 +357,22 @@ def _check_post_conditions(
             continue
         non_null = int(cast("Any", df[col].notna().sum()))  # pyright: ignore[reportUnknownMemberType]
         coverage = non_null / row_count
-        if coverage < _COVERAGE_THRESHOLD:
+        if coverage < coverage_threshold:
             warnings.append(
                 f"variable {var['name']!r} (column {col!r}) coverage"
-                f" {coverage:.2%} < threshold {_COVERAGE_THRESHOLD:.0%}"
+                f" {coverage:.2%} < threshold {coverage_threshold:.0%}"
             )
     return row_count, columns, warnings
 
 
 @awrites_to("merged_dataset")
 async def data_cleaning(state: WorkflowState) -> MergedDataset:
-    """Merge DownloadedFiles into a single long-format CSV.
+    """通过 DuckDB 把 DownloadedFiles 合并为单一长表 CSV。
 
-    Drives a generic ReAct subgraph bound to one ``run_python`` tool. The LLM
-    performs joins / reshape / renaming; this node enforces post-conditions
-    (primary-key uniqueness hard, variable coverage soft) and writes
-    ``merged_dataset``.
+    打开内存 DuckDB 连接，把每份源 CSV 注册为 ``src_<source_table>`` 视图，
+    绑定 ``run_sql`` 工具驱动 ReAct 子图；拿到 LLM 声明的 ``final_view``
+    后，把所有非 ``src_`` 中间产物 dump 到 ``_stage/`` 再把 final_view
+    导出为 merged.csv，最后执行后置校验。
     """
     err = _validate(state)
     if err is not None:
@@ -213,43 +381,54 @@ async def data_cleaning(state: WorkflowState) -> MergedDataset:
     spec: EmpiricalSpec = state["empirical_spec"]  # pyright: ignore[reportTypedDictNotRequiredAccess]
     files = state["downloaded_files"]["files"]  # pyright: ignore[reportTypedDictNotRequiredAccess]
     output_path = _derive_output_path(files)
+    stage_dir = output_path.parent / _STAGE_DIRNAME
+    stage_dir.mkdir(parents=True, exist_ok=True)
 
-    python_tool = _make_python_tool()
-    prompt = load_prompt("data_cleaning")
-    subgraph = build_react_subgraph(
-        tools=[python_tool], prompt=prompt, max_iterations=_MAX_ITERATIONS
-    )
-
-    initial: ReactState = {
-        "messages": [HumanMessage(content=_build_human_prompt(spec, files, output_path))],
-        "iteration_count": 0,
-    }
-    result = await subgraph.ainvoke(initial)  # pyright: ignore[reportUnknownMemberType]
-
-    messages = cast("list[Any]", result.get("messages", []))
-    if not messages:
-        raise RuntimeError("data_cleaning: ReAct subgraph returned no messages")
-    last = messages[-1]
-    if not isinstance(last, AIMessage):
-        msg = f"data_cleaning: final message is not AIMessage (got {type(last).__name__})"
-        raise RuntimeError(msg)
-    if last.tool_calls:
-        raise RuntimeError(
-            "data_cleaning: ReAct reached max_iterations without a terminal AIMessage"
+    conn = duckdb.connect(":memory:")
+    try:
+        view_names = _register_sources(conn, files)
+        source_blocks = _probe_sources_for_prompt(conn, files, view_names)
+        sql_tool = _make_sql_tool(conn)
+        prompt = load_prompt("data_cleaning")
+        subgraph = build_react_subgraph(
+            tools=[sql_tool], prompt=prompt, max_iterations=_MAX_ITERATIONS
         )
 
-    content_attr = cast("Any", last.content)  # pyright: ignore[reportUnknownMemberType]
-    if not isinstance(content_attr, str):
-        msg = f"data_cleaning: AIMessage.content must be str, got {type(content_attr).__name__}"
-        raise RuntimeError(msg)
-    payload = _extract_final_json(content_attr)
-    primary_key = _extract_primary_key(payload)
+        initial: ReactState = {
+            "messages": [
+                HumanMessage(content=_build_human_prompt(spec, source_blocks, output_path))
+            ],
+            "iteration_count": 0,
+        }
+        result = await subgraph.ainvoke(initial)  # pyright: ignore[reportUnknownMemberType]
 
-    if not output_path.exists():
-        msg = f"data_cleaning: LLM finished but output file {output_path!s} does not exist"
-        raise RuntimeError(msg)
+        messages = cast("list[Any]", result.get("messages", []))
+        if not messages:
+            raise RuntimeError("data_cleaning: ReAct subgraph returned no messages")
+        last = messages[-1]
+        if not isinstance(last, AIMessage):
+            msg = f"data_cleaning: final message is not AIMessage (got {type(last).__name__})"
+            raise RuntimeError(msg)
+        if last.tool_calls:
+            raise RuntimeError(
+                "data_cleaning: ReAct reached max_iterations without a terminal AIMessage"
+            )
+        content_attr = cast("Any", last.content)  # pyright: ignore[reportUnknownMemberType]
+        if not isinstance(content_attr, str):
+            msg = f"data_cleaning: AIMessage.content must be str, got {type(content_attr).__name__}"
+            raise RuntimeError(msg)
+        payload = _extract_final_json(content_attr)
+        final_view = _extract_final_view(payload)
+        primary_key = _extract_primary_key(payload)
 
-    row_count, columns, warnings = _check_post_conditions(output_path, spec, primary_key)
+        _check_final_view_exists(conn, final_view)
+        _dump_intermediate_artifacts(conn, stage_dir)
+        _export_final_view(conn, final_view, output_path)
+    finally:
+        conn.close()
+
+    threshold = get_settings().cleaning_coverage_threshold
+    row_count, columns, warnings = _check_post_conditions(output_path, spec, primary_key, threshold)
     return {
         "file_path": str(output_path),
         "row_count": row_count,
