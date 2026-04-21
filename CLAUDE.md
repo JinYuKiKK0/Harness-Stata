@@ -77,6 +77,17 @@ harness-stata/
   4. 某个 section 长期空着 → 删除该 section；需要时再加回来
 - 完成一次可交付任务后，必须进行Git提交
 
+## 测试约定
+
+本项目是 Agent 项目，LLM 输出不稳定，mock 模型输出的测试是"先射箭再画靶子"——只证明"如果模型恰好按预期输出，代码能正确处理"，不证明端到端链路正确。
+
+**有价值的测试**：
+- 纯逻辑：路由函数、格式化辅助、输入校验，完全不涉及 LLM
+- 确定性后处理：mock 仅用于驱动状态机到达特定分支，被测逻辑本身是确定性代码（sign_check 计算、manifest 合并、hard/soft 路由、文件存在性校验）
+- 真实副作用：mock agent 但执行真实 DuckDB SQL / 文件系统操作
+
+**禁止写的测试**：mock LLM / create_agent 返回预设的"正确"结构化输出，然后验证节点解包逻辑——这等价于不测试。
+
 ### feature 增改约定
 
 `specs/feature_list.json` 由 Claude 主导维护。实现过程中发现需求遗漏、需要拆分或合并 feature 时，由 Claude 主动提议（说明动因与建议的 id/description/steps/depends_on），用户确认后才能修改 feature 的结构性内容。已存在的 `id` 永不重排（保证 depends_on 引用稳定），新增 feature 取递增编号。`passes` 字段的翻转不属于结构性修改，无需确认。
