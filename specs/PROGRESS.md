@@ -10,7 +10,16 @@ MVP 前 25 个 feature (F01-F25) 已 `passes=true`。
 
 <!-- 每个会话覆盖此部分。保持简洁。 -->
 
-- F26 (本次会话) — 数据探针 list_databases 缓存:
+- 本次会话 bug fix — probe 子图 ReAct 上下文补充时间范围:
+  - 根因:`_variable_react` 的 HumanMessage 仅携带变量定义 + 已购库清单,丢失 EmpiricalSpec 的
+    `time_range_start` / `time_range_end` / `data_frequency` / `sample_scope`;Agent 调 csmar-mcp
+    的 probe_query / 样本拉取类工具时不会传时间过滤,无法正确判断"目标时间范围下是否可得"
+  - 变更:`src/harness_stata/subgraphs/probe_subgraph.py::_variable_react` HumanMessage 注入
+    Sample scope / Time range / Data frequency 三行,放在变量定义与已购库清单之间
+  - 未改 prompt、未改 ProbeState schema、未改 nodes/data_probe.py(spec 已通过 initial 传入)
+  - 质量门禁 9/9 通过
+
+- F26 — 数据探针 list_databases 缓存:
   - 根因:`csmar_list_databases` 是零参数确定性枚举,当前由每个变量的 ReAct 单独调用,浪费 1 轮 per_variable_max_calls 预算;csmar-mcp 服务端已有 30 min SQLite cache 但省不了 LLM token 与轮次
   - 架构决策:caller-side 预拉(不加 preamble 节点保持 subgraph 3 节点不漂移);存会话内存 ProbeState.available_databases (str);`data_probe.py` 节点过滤 + `build_probe_subgraph` 防御性再过滤
   - 变更:

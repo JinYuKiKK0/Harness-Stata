@@ -183,12 +183,16 @@ def build_probe_subgraph(
             return {}
 
         db_block = state.get("available_databases", "")
+        spec = state["empirical_spec"]  # type: ignore[reportTypedDictNotRequiredAccess]
         messages: list[BaseMessage] = [
             SystemMessage(content=prompt),
             HumanMessage(
                 content=(
                     f"Variable: {var['name']} - {var['description']} "
                     f"(contract: {var['contract_type']}, role: {var['role']})\n\n"
+                    f"Sample scope: {spec['sample_scope']}\n"
+                    f"Time range: {spec['time_range_start']} to {spec['time_range_end']}\n"
+                    f"Data frequency: {spec['data_frequency']}\n\n"
                     f"Purchased databases:\n{db_block}"
                 )
             ),
