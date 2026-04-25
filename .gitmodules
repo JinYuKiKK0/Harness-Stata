@@ -1,6 +1,6 @@
 [submodule "packages/CSMAR-Data-MCP"]
 	path = packages/CSMAR-Data-MCP
-	url = https://github.com/JinYuKiKK0/CSMAR-Data-MCP.git
+	url = git@github.com:JinYuKiKK0/CSMAR-Data-MCP.git
 [submodule "packages/Stata-Executor-MCP"]
 	path = packages/Stata-Executor-MCP
-	url = https://github.com/JinYuKiKK0/Stata-Executor-MCP.git
+	url = git@github.com:JinYuKiKK0/Stata-Executor-MCP.git

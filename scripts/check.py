@@ -23,9 +23,6 @@ from pathlib import Path
 PATHS = ["src/harness_stata"]
 ROOT = Path(__file__).resolve().parent.parent
 TMP_ROOT = ROOT / ".tmp"
-CSMAR_MCP_ROOT = "packages/CSMAR-Data-MCP"
-CSMAR_MCP_PKG = f"{CSMAR_MCP_ROOT}/csmar_mcp"
-CSMAR_MCP_CONFIG = f"{CSMAR_MCP_ROOT}/pyproject.toml"
 
 
 @dataclass(frozen=True)
@@ -43,9 +40,6 @@ CHECKS: list[Check] = [
     Check("pyright", [*UV, "pyright"]),
     Check("import-linter", [*UV, "lint-imports"]),
     Check("custom lint", [*UV, "python", "scripts/lint_custom.py"]),
-    Check("ruff lint (csmar-mcp)", [*UV, "ruff", "check", CSMAR_MCP_PKG, "--config", CSMAR_MCP_CONFIG]),
-    Check("ruff format (csmar-mcp)", [*UV, "ruff", "format", "--check", CSMAR_MCP_PKG, "--config", CSMAR_MCP_CONFIG]),
-    Check("pyright (csmar-mcp)", [*UV, "pyright", "-p", CSMAR_MCP_CONFIG]),
 ]
 
 

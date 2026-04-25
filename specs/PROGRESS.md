@@ -9,17 +9,14 @@ F27 MCP 子模块迁移：移除主仓库内旧 `packages/csmar-mcp` / `packages
 <!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
 - 本次会话 — MCP 子模块迁移：
-  - `packages/CSMAR-Data-MCP` 已本地提交 `1035a64`；ruff check、ruff format、pyright 通过。
-  - `packages/Stata-Executor-MCP` 已本地提交 `6b63709`；保留既有 ruff/pytest 技术债，暂不纳入主仓库质量门禁。
-  - 主仓库新增 `.gitmodules`，删除旧 MCP 源码目录，uv workspace 指向两个新 submodule。
-  - 主仓库 `uv sync --extra dev` 已确认从新 submodule 安装 `csmar-mcp` 与 `stata-executor`；`uv run scripts/check.py` 9/9 通过。
-  - 推送两个子仓库时当前环境缺少 GitHub HTTPS 凭据，子仓库 commit 仍需在有凭据环境补推。
+  - `packages/CSMAR-Data-MCP` 已提交并通过 SSH 推送 `1035a64`；ruff check、ruff format、pyright 通过。
+  - `packages/Stata-Executor-MCP` 已提交并通过 SSH 推送 `6b63709`；保留既有 ruff/pytest 技术债。
+  - 主仓库新增 `.gitmodules`，删除旧 MCP 源码目录，uv workspace 指向两个新 submodule，submodule URL 已切换为 SSH。
+  - 主仓库 `uv sync --extra dev` 已确认从新 submodule 安装 `csmar-mcp` 与 `stata-executor`。
+  - lint 边界明确：主仓库 `scripts/check.py` 只检查 Harness-Stata，自仓库 lint 由各 MCP 子仓库独立维护。
 
 ## 下一步
 
-- 完成 F27 收尾：
-  - 在有 GitHub 凭据的环境推送 `packages/CSMAR-Data-MCP` 与 `packages/Stata-Executor-MCP` 的本地 commits。
-  - 推送后重新运行 `git submodule status`，确认主仓库 submodule 指针均可从远端拉取。
 - **MVP 本地 CLI 已完成**。所有 25+F26 个 feature passes=true，ReAct 子图已迁移到 `create_agent`。下一阶段方向由用户决定:
   - (a) 真实端到端联调:启动 CSMAR-Data-MCP / Stata-Executor-MCP 服务,配 DashScope API key,跑真实 UserRequest 验证 LLM + MCP 链路
   - (b) 技术债清理:probe_subgraph.py 487 行拆分 / stata-executor ruff+pyright 收口 / tests/ 纳入 ruff format 门禁
@@ -34,7 +31,6 @@ F27 MCP 子模块迁移：移除主仓库内旧 `packages/csmar-mcp` / `packages
 - `@tool` 装饰器在 pyright strict 下需 `# pyright: ignore[reportUntypedFunctionDecorator, reportUnknownVariableType, reportUnknownArgumentType]` 压制
 - pandas 在 pyright strict 下大量 reportUnknownMemberType,F20 采用 `cast("Any", ...)` + `# pyright: ignore` 组合
 - ruff RUF001/RUF002/RUF003 已在 pyproject 中 ignore（中文 docstring/注释采用全角标点为项目约定）；但 Field description 仍要避免同形希腊字母 α/β/γ
-- 当前环境缺少 GitHub HTTPS 凭据，两个 MCP 子仓库 push 失败：`could not read Username for 'https://github.com'`
 - `packages/Stata-Executor-MCP/` 的 ruff/pyright 收口尚未做；临时 ruff 检查暴露 import 排序、相对导入、SIM103 等既有问题
 - `packages/Stata-Executor-MCP/` 临时 pytest 在当前环境触发 pytest capture 临时文件 `FileNotFoundError`，需后续在子仓库单独定位
 - `subgraphs/probe_subgraph.py` 当前 487 行触发 check_file_size warn,下一次实质性扩展前应拆出 `_probe_helpers.py`

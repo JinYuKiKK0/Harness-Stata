@@ -314,7 +314,7 @@
         "uv sync --extra dev、scripts/check.py、导入验证与 git submodule status 验证通过"
       ],
       "depends_on": ["F26"],
-      "passes": false
+      "passes": true
     }
   ]
 }
