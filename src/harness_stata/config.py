@@ -21,6 +21,7 @@ ENV_PATH = PROJECT_ROOT / ".env"
 class Settings:
     dashscope_api_key: str
     llm_model_name: str
+    llm_base_url: str
     llm_temperature: float
     csmar_account: str
     csmar_password: str
@@ -42,6 +43,11 @@ def get_settings() -> Settings:
     api_key = env.get("DASHSCOPE_API_KEY", "")
     if not api_key:
         msg = "DASHSCOPE_API_KEY 未配置。请在项目根 .env 中设置 DashScope API Key。"
+        raise RuntimeError(msg)
+
+    llm_base_url = env.get("LLM_BASE_URL", "")
+    if not llm_base_url:
+        msg = "LLM_BASE_URL 未配置。请在项目根 .env 中设置 LLM 服务的 base_url"
         raise RuntimeError(msg)
 
     csmar_account = env.get("CSMAR_ACCOUNT", "")
@@ -97,6 +103,7 @@ def get_settings() -> Settings:
     return Settings(
         dashscope_api_key=api_key,
         llm_model_name=env.get("LLM_MODEL", "qwen-plus"),
+        llm_base_url=llm_base_url,
         llm_temperature=float(env.get("LLM_TEMPERATURE", "0.3")),
         csmar_account=csmar_account,
         csmar_password=csmar_password,

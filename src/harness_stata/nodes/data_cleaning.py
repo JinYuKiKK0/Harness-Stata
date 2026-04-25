@@ -41,7 +41,7 @@ from harness_stata.state import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_MAX_ITERATIONS = 30
+_MAX_ITERATIONS = 40
 _MERGED_FILENAME = "merged.csv"
 _STAGE_DIRNAME = "_stage"
 _SRC_PREFIX = "src_"

@@ -24,11 +24,23 @@ HumanMessage 已给出每个 `src_<source_table>` 视图的完整 schema 与前 
 - 不要 `COPY` 到文件——导出由节点完成
 - 不要 `DROP` 任何视图——节点会自动把所有非 `src_` 前缀的视图/表 dump 到 `_stage/` 供调试
 
-## 终止输出
+## 何时结束 & 如何结束
 
-清洗完成后,直接按运行时 schema 返回:
+满足以下两条即可结束：
 
-- `final_view`:最终视图/表名(必须匹配 `[A-Za-z_][A-Za-z0-9_]*`)
-- `primary_key`:最终视图的主键列名列表
+1. 你已创建一个合并后的视图/表 `<final_view>`，里面包含分析所需的全部列
+2. 你能用一次 `SELECT ... LIMIT 5` 看到 `<final_view>` 的非空样本
 
-节点会校验 `final_view` 存在 → dump 所有中间视图到 `_stage/` → `COPY final_view` 到指定 CSV 路径 → 读取 CSV 做主键唯一性与变量覆盖率的后置校验。
+**结束方式**：不要再调 `run_sql`。直接调用 `_CleaningOutput` 工具（你的工具列表里除 `run_sql` 之外的那个），传入 `final_view` 与 `primary_key` 两个字段 —— 这是终局工具，调用它后节点接手后续工作，本轮 ReAct 立即结束。
+
+**节点已经会自动做的事，你不要重复做**：
+
+- 主键 `(primary_key)` 唯一性校验（不要自己写 `GROUP BY ... HAVING COUNT(*) > 1`）
+- 各 variable 在最终 CSV 的覆盖率校验
+- 把所有非 `src_` 前缀的中间视图 dump 到 `_stage/`
+- `COPY final_view` 到指定 CSV 路径
+
+字段格式：
+
+- `final_view`：必须匹配 `[A-Za-z_][A-Za-z0-9_]*`
+- `primary_key`：最终视图的主键列名列表
