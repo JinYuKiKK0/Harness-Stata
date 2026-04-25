@@ -1,6 +1,6 @@
 """CSMAR MCP client adapter.
 
-Launches ``packages/csmar-mcp`` as a stdio subprocess via
+Launches the ``packages/CSMAR-Data-MCP`` submodule as a stdio subprocess via
 ``langchain-mcp-adapters`` and exposes its tools as LangChain ``BaseTool``
 instances for upstream ``nodes/`` and ``subgraphs/``.
 
@@ -12,7 +12,7 @@ Upstream modules must not import ``csmar_mcp`` / ``csmarapi`` directly
 from __future__ import annotations
 
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from langchain_core.tools import BaseTool
@@ -24,7 +24,7 @@ from harness_stata.config import get_settings
 
 
 @asynccontextmanager
-async def get_csmar_tools() -> AsyncIterator[list[BaseTool]]:
+async def get_csmar_tools() -> AsyncGenerator[list[BaseTool]]:
     """Yield LangChain tools backed by the csmar-mcp stdio server.
 
     Usage::

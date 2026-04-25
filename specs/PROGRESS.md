@@ -2,74 +2,26 @@
 
 ## 当前焦点
 
-ReAct 子图迁移到 `langchain.agents.create_agent`：删除手写 `generic_react.py`，data_cleaning / descriptive_stats / regression 节点改用 `create_agent + ModelCallLimitMiddleware + response_format`，probe_subgraph 内层 agent 改用 `create_agent + ToolCallLimitMiddleware`，顺带修复 `docs/bug.md` 记录的 `_extract_finding` AssertionError（原因：二次 `with_structured_output` 提取，现在一次 `response_format` 拿结果）。
-
-9/9 质量门禁已通过。
+F27 MCP 子模块迁移：移除主仓库内旧 `packages/csmar-mcp` / `packages/stata-executor` 源码，改用 `packages/CSMAR-Data-MCP` 与 `packages/Stata-Executor-MCP` 两个 git submodule；同步修正主项目 uv workspace、MCP 客户端说明、质量门禁路径与项目文档。
 
 ## 当前上下文
 
-<!-- 每次任务完成覆写此部分。保持简洁。 -->
+<!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
-- 本次会话 — ReAct 子图全面迁移到 `create_agent`：
-  - 动机：4 个 ReAct 节点依赖手写 `generic_react.py`，已被 git 删除导致项目无法运行；同时 `create_agent` 官方覆盖 99% 场景，自带 middleware、结构化输出、LangSmith 追踪。
-  - 核心变更：
-    - 删除 `subgraphs/generic_react.py` + `tests/subgraphs/test_generic_react.py`
-    - `data_cleaning` / `descriptive_stats` / `regression` 3 个节点内联 `create_agent + ModelCallLimitMiddleware(exit_behavior="error") + response_format=<Pydantic>`；`ModelCallLimitExceededError` catch 后 re-raise 为 `RuntimeError("max_iterations...")`
-    - `probe_subgraph._variable_react` 改为 `create_agent + ToolCallLimitMiddleware(exit_behavior="end") + response_format=_VariableProbeFindingModel`；删除 `_extract_finding` / `_format_trace` 二次提取步骤；`ProbeState` 新增 `variable_finding` 字段
-    - 4 个测试文件 mock 对象从 `build_react_subgraph` / `get_chat_model().bind_tools()` 改为 mock `create_agent` 返回 `{"messages": [...], "structured_response": <Pydantic>}`
-    - `ModelCallLimitExceededError` 构造参数修正为 `(thread_count, run_count, thread_limit, run_limit)`
-    - `CLAUDE.md` 架构树移除 `generic_react.py`，新增 `studio.py` + `_mcp_interceptors.py`
-  - 已知保留风险：qwen-plus + ToolStrategy 输出 list/dict 字段不稳定（`docs/bug.md` 2 次记录），用户选择"硬抗等换 provider"
-
-- 本次会话重构 — F20 数据清洗节点改用 DuckDB SQL：
-  - 动机：DataFrame 命令式清洗心智负担重、中间态无名难审计；换成 SQL + 命名 VIEW 后每一步都是可查询的声明式中间态。
-  - 架构决策：
-    - **D1 底座**：DuckDB 内存连接（`duckdb>=1.1.0`），源 CSV 走 `conn.read_csv(path).create_view(src_<source_table>)` 预注册；终产物由 node `conn.sql('SELECT * FROM "<final_view>"').write_csv(...)` 导出（路径不拼 SQL）。
-    - **D2 工具粒度**：单一 `run_sql(query)`；SELECT/DESCRIBE 返回前 20 行 + 总行数，DDL/DML/SET 折叠为 "OK"，错误返回 "ERROR: ..." 字符串（不抛异常，由 ReAct 自行修复）。
-    - **D3 预注入**：HumanMessage 中附 schema + 3 行样本，省掉 LLM 摸底回合。
-    - **D4 契约变更**：终态 JSON 从 `{file_path, primary_key}` 改为 `{final_view, primary_key}`；LLM 只声明 view，COPY 由 node 执行。
-    - **D5 中间产物**：node 在最终导出前扫描 main schema 下非 `src_` 前缀的所有 tables/views，best-effort dump 到 `<session>/_stage/<name>.csv`（含失败尝试），开发期调试用。
-    - **D6 注入防御**：`_IDENT_RE = ^[A-Za-z_][A-Za-z0-9_]*$` 白名单校验 `source_table` 与 `final_view`；路径通过 DuckDB Python relation API 传入，不拼 SQL；`information_schema` 查询用 `?` 参数化。
-    - **D7 xlsx 预占**：`_register_sources` 按 suffix 分支，`.xlsx/.xls` 本期 `NotImplementedError`。
-  - 变更：
-    - `src/harness_stata/nodes/data_cleaning.py`：重写为 DuckDB 版本，docstring 全中文。
-    - `src/harness_stata/prompts/data_cleaning.md`：重写为 DuckDB SQL 数据工程师角色 + 新终态契约。
-    - `src/harness_stata/config.py`：`Settings` 新增 `cleaning_coverage_threshold: float`，读 `.env` 的 `HARNESS_CLEANING_COVERAGE_THRESHOLD`（默认 0.8，边界 (0, 1]）。
-    - `pyproject.toml`：加 `duckdb>=1.1.0`；`[tool.ruff.lint]` 忽略 `RUF001/RUF002/RUF003`（中文 docstring/注释里的全角标点为预期用法）。
-    - `tests/nodes/test_data_cleaning.py`：fake subgraph 改为真实调用 `run_sql` 执行测试预设 SQL；新增中间产物 dump / final_view 缺失 / 非法 identifier / 非法 source_table / xlsx NotImplementedError 等测试。
-  - 质量门禁 9/9 通过。
-
-- 既往会话 bug fix — probe 子图 ReAct 上下文补充时间范围:
-  - 根因:`_variable_react` 的 HumanMessage 仅携带变量定义 + 已购库清单,丢失 EmpiricalSpec 的
-    `time_range_start` / `time_range_end` / `data_frequency` / `sample_scope`;Agent 调 csmar-mcp
-    的 probe_query / 样本拉取类工具时不会传时间过滤,无法正确判断"目标时间范围下是否可得"
-  - 变更:`src/harness_stata/subgraphs/probe_subgraph.py::_variable_react` HumanMessage 注入
-    Sample scope / Time range / Data frequency 三行,放在变量定义与已购库清单之间
-  - 未改 prompt、未改 ProbeState schema、未改 nodes/data_probe.py(spec 已通过 initial 传入)
-  - 质量门禁 9/9 通过
-
-- F26 — 数据探针 list_databases 缓存:
-  - 根因:`csmar_list_databases` 是零参数确定性枚举,当前由每个变量的 ReAct 单独调用,浪费 1 轮 per_variable_max_calls 预算;csmar-mcp 服务端已有 30 min SQLite cache 但省不了 LLM token 与轮次
-  - 架构决策:caller-side 预拉(不加 preamble 节点保持 subgraph 3 节点不漂移);存会话内存 ProbeState.available_databases (str);`data_probe.py` 节点过滤 + `build_probe_subgraph` 防御性再过滤
-  - 变更:
-    - `src/harness_stata/subgraphs/probe_subgraph.py`:ProbeState 增 `available_databases: str`;`bound_tools` 过滤 `csmar_list_databases` 且空列表时 ValueError;`_variable_react` HumanMessage 追加 "Purchased databases: ..." 块 + "Do NOT call any list_databases tool" 指令
-    - `src/harness_stata/nodes/data_probe.py`:进入 subgraph 前 `list_tool.ainvoke({})` 拉一次,`str(raw)` 注入 initial state;工具缺失硬抛 RuntimeError
-    - `src/harness_stata/prompts/data_probe.md`:工具说明段移除 "列举数据库";探测策略步骤 1 改为 "从用户消息中列出的已购数据库清单里选"
-    - `tests/nodes/test_data_probe.py`:`_patch_csmar` 默认带 list_databases mock(return '..."CSMAR", "RESSET"..."');新增 `test_data_probe_prefetches_list_databases_once` 与 `test_data_probe_raises_when_list_databases_tool_missing`
-    - `tests/subgraphs/test_probe_subgraph.py`:新增 `TestAvailableDatabasesInjection` (注入/回落两例) 与 `TestToolFiltering` (bind_tools 参数不含 list_databases / 仅 list_databases 时 ValueError)
-    - `CLAUDE.md` 技术栈段追加 SqliteSaver + DuckDB 两行战略决策
-    - `specs/feature_list.json` 新增 F26 (depends_on: F15, F25)
-  - 设计取舍:
-    - **D1 存储层**:ProbeState 会话内存 + csmar-mcp TTL 兜底(拒绝在主应用引入 PG 二级缓存,避免 ownership 分裂)
-    - **D2 拉取位置**:caller-side (data_probe.py) 而非 subgraph preamble — 保持 subgraph 3 节点 FSM 不漂移 `docs/empirical-analysis-workflow.md`
-    - **D3 字段类型**:`available_databases: str` 原始工具输出字符串(YAGNI,不做 JSON 解析;LLM 能直接读)
-    - **D4 工具过滤**:caller 过滤 + subgraph 防御性再过滤(双保险)
-    - **D5 失败语义**:list_databases 调用失败直接 RuntimeError(CSMAR 不可达时降级无意义)
+- 本次会话 — MCP 子模块迁移：
+  - `packages/CSMAR-Data-MCP` 已本地提交 `1035a64`；ruff check、ruff format、pyright 通过。
+  - `packages/Stata-Executor-MCP` 已本地提交 `6b63709`；保留既有 ruff/pytest 技术债，暂不纳入主仓库质量门禁。
+  - 主仓库新增 `.gitmodules`，删除旧 MCP 源码目录，uv workspace 指向两个新 submodule。
+  - 主仓库 `uv sync --extra dev` 已确认从新 submodule 安装 `csmar-mcp` 与 `stata-executor`；`uv run scripts/check.py` 9/9 通过。
+  - 推送两个子仓库时当前环境缺少 GitHub HTTPS 凭据，子仓库 commit 仍需在有凭据环境补推。
 
 ## 下一步
 
+- 完成 F27 收尾：
+  - 在有 GitHub 凭据的环境推送 `packages/CSMAR-Data-MCP` 与 `packages/Stata-Executor-MCP` 的本地 commits。
+  - 推送后重新运行 `git submodule status`，确认主仓库 submodule 指针均可从远端拉取。
 - **MVP 本地 CLI 已完成**。所有 25+F26 个 feature passes=true，ReAct 子图已迁移到 `create_agent`。下一阶段方向由用户决定:
-  - (a) 真实端到端联调:启动 csmar-mcp / stata-executor-mcp 服务,配 DashScope API key,跑真实 UserRequest 验证 LLM + MCP 链路
+  - (a) 真实端到端联调:启动 CSMAR-Data-MCP / Stata-Executor-MCP 服务,配 DashScope API key,跑真实 UserRequest 验证 LLM + MCP 链路
   - (b) 技术债清理:probe_subgraph.py 487 行拆分 / stata-executor ruff+pyright 收口 / tests/ 纳入 ruff format 门禁
   - (c) Web 迭代启动:把 CLI 换成 HTTP/WS 适配层,checkpointer 升级为 SqliteSaver 以跨进程 resume
   - (d) 功能扩展:稳健性回归 / 异质性分析 / 可视化等非 MVP feature
@@ -82,8 +34,9 @@ ReAct 子图迁移到 `langchain.agents.create_agent`：删除手写 `generic_re
 - `@tool` 装饰器在 pyright strict 下需 `# pyright: ignore[reportUntypedFunctionDecorator, reportUnknownVariableType, reportUnknownArgumentType]` 压制
 - pandas 在 pyright strict 下大量 reportUnknownMemberType,F20 采用 `cast("Any", ...)` + `# pyright: ignore` 组合
 - ruff RUF001/RUF002/RUF003 已在 pyproject 中 ignore（中文 docstring/注释采用全角标点为项目约定）；但 Field description 仍要避免同形希腊字母 α/β/γ
-- 主 `.venv` 缺 `prettytable` (csmarapi 的运行时依赖),scripts/check.py 已 9/9 通过但手动跑 csmar-mcp 子包单测会 ImportError
-- `packages/stata-executor/` 的 ruff/pyright 收口尚未做 (类比 csmar-mcp 已完成的技术债)
+- 当前环境缺少 GitHub HTTPS 凭据，两个 MCP 子仓库 push 失败：`could not read Username for 'https://github.com'`
+- `packages/Stata-Executor-MCP/` 的 ruff/pyright 收口尚未做；临时 ruff 检查暴露 import 排序、相对导入、SIM103 等既有问题
+- `packages/Stata-Executor-MCP/` 临时 pytest 在当前环境触发 pytest capture 临时文件 `FileNotFoundError`，需后续在子仓库单独定位
 - `subgraphs/probe_subgraph.py` 当前 487 行触发 check_file_size warn,下一次实质性扩展前应拆出 `_probe_helpers.py`
 - F20 数据清洗节点已从 pandas REPL 重构为 DuckDB SQL；覆盖率阈值已提到 `Settings.cleaning_coverage_threshold`（不再硬编码）
 - F22 `actual_sign` 由 LLM 从 log 抽取,节点不 parse log;若发现 LLM 误读可改为节点端正则抽取 Stata 回归表格

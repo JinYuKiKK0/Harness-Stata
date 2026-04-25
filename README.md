@@ -1,6 +1,6 @@
 # Harness-Stata
 
-基于 LangGraph 的 Stata 实证分析 Agent。通过显式状态机组织实证流程，解析用户需求并调用 csmar-mcp 与 stata-executor-mcp 完成数据获取、清洗与回归分析，返回实证结果。
+基于 LangGraph 的 Stata 实证分析 Agent。通过显式状态机组织实证流程，解析用户需求并调用 CSMAR-Data-MCP 与 Stata-Executor-MCP 完成数据获取、清洗与回归分析，返回实证结果。
 
 
 ## 工作流总览
@@ -35,7 +35,7 @@
 - **编排**：langgraph、langchain、langchain-core
 - **观测 / 调试**：LangSmith Studio（本地 Agent Server）
 - **LLM**：DashScope ChatTongyi（qwen-plus），通过 `langchain-community`
-- **MCP 集成**：`langchain-mcp-adapters`，经 MCP 协议调用 `packages/csmar-mcp` 与 `packages/stata-executor`
+- **MCP 集成**：`langchain-mcp-adapters`，经 stdio MCP 协议调用 `packages/CSMAR-Data-MCP` 与 `packages/Stata-Executor-MCP` submodule
 - **数据处理**：pandas
 - **CLI**：typer
 - **包管理**：UV
@@ -57,8 +57,8 @@ src/harness_stata/
 └── clients/         # 外部依赖统一入口（csmar / stata / llm）
 
 packages/
-├── csmar-mcp/        # CSMAR 数据获取 MCP 服务
-└── stata-executor/   # Stata 执行 MCP 服务
+├── CSMAR-Data-MCP/      # CSMAR 数据获取 MCP submodule
+└── Stata-Executor-MCP/  # Stata 执行 MCP submodule
 ```
 
 ### 分层约束（import-linter 强制）

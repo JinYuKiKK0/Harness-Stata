@@ -1,6 +1,6 @@
 """Stata executor MCP client adapter.
 
-Launches ``packages/stata-executor`` as a stdio subprocess via
+Launches the ``packages/Stata-Executor-MCP`` submodule as a stdio subprocess via
 ``langchain-mcp-adapters`` and exposes its tools as LangChain ``BaseTool``
 instances for upstream ``nodes/`` and ``subgraphs/``.
 
@@ -12,7 +12,7 @@ Upstream modules must not import ``stata_executor`` directly
 from __future__ import annotations
 
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from langchain_core.tools import BaseTool
@@ -24,7 +24,7 @@ from harness_stata.config import get_settings
 
 
 @asynccontextmanager
-async def get_stata_tools() -> AsyncIterator[list[BaseTool]]:
+async def get_stata_tools() -> AsyncGenerator[list[BaseTool]]:
     """Yield LangChain tools backed by the stata-executor stdio server.
 
     Usage::

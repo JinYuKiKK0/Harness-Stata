@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## 项目简介
 
@@ -90,4 +90,4 @@ harness-stata/
 
 ### feature 增改约定
 
-`specs/feature_list.json` 由 Claude 主导维护。实现过程中发现需求遗漏、需要拆分或合并 feature 时，由 Claude 主动提议（说明动因与建议的 id/description/steps/depends_on），用户确认后才能修改 feature 的结构性内容。已存在的 `id` 永不重排（保证 depends_on 引用稳定），新增 feature 取递增编号。`passes` 字段的翻转不属于结构性修改，无需确认。
+`specs/feature_list.json` 由 Codex 主导维护。实现过程中发现需求遗漏、需要拆分或合并 feature 时，由 Codex 主动提议（说明动因与建议的 id/description/steps/depends_on），用户确认后才能修改 feature 的结构性内容。已存在的 `id` 永不重排（保证 depends_on 引用稳定），新增 feature 取递增编号。`passes` 字段的翻转不属于结构性修改，无需确认。

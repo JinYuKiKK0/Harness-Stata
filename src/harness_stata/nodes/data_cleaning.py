@@ -216,7 +216,11 @@ def _make_sql_tool(conn: DuckDBPyConnection) -> BaseTool:
         以便 Agent 根据错误自行修正重跑。
         """
         try:
-            df = conn.execute(query).fetchdf()
+            cursor = conn.execute(query)
+            if cursor is None:  # pyright: ignore[reportUnnecessaryComparison]
+                # DuckDB 对 comment-only / 空语句返回 None，避免后续 .fetchdf() 炸 AttributeError
+                return "OK (no executable statement)"
+            df = cursor.fetchdf()
         except duckdb.Error as exc:
             return f"ERROR: {type(exc).__name__}: {exc}"
         except Exception as exc:

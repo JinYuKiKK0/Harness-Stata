@@ -13,13 +13,17 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 
 PATHS = ["src/harness_stata"]
-CSMAR_MCP_ROOT = "packages/csmar-mcp"
+ROOT = Path(__file__).resolve().parent.parent
+TMP_ROOT = ROOT / ".tmp"
+CSMAR_MCP_ROOT = "packages/CSMAR-Data-MCP"
 CSMAR_MCP_PKG = f"{CSMAR_MCP_ROOT}/csmar_mcp"
 CSMAR_MCP_CONFIG = f"{CSMAR_MCP_ROOT}/pyproject.toml"
 
@@ -33,7 +37,7 @@ class Check:
 UV = ["uv", "run", "--"]
 
 CHECKS: list[Check] = [
-    Check("pytest", [*UV, "python", "-m", "pytest", "-x", "-q", "--tb=short", "-m", "not integration"]),
+    Check("pytest", [*UV, "python", "-m", "pytest", "-x", "-q", "-s", "--tb=short", "-m", "not integration"]),
     Check("ruff lint", [*UV, "ruff", "check", *PATHS]),
     Check("ruff format", [*UV, "ruff", "format", "--check", *PATHS]),
     Check("pyright", [*UV, "pyright"]),
@@ -46,6 +50,7 @@ CHECKS: list[Check] = [
 
 
 def run_check(check: Check) -> int:
+    TMP_ROOT.mkdir(exist_ok=True)
     try:
         result = subprocess.run(
             check.cmd,
@@ -54,6 +59,12 @@ def run_check(check: Check) -> int:
             text=True,
             encoding="utf-8",
             errors="replace",
+            env={
+                **os.environ,
+                "TMPDIR": str(TMP_ROOT),
+                "TMP": str(TMP_ROOT),
+                "TEMP": str(TMP_ROOT),
+            },
         )
     except FileNotFoundError:
         print(f"  FAIL  {check.name}: 找不到命令 {check.cmd[0]!r}。请先激活 venv 并安装 dev 依赖。")
