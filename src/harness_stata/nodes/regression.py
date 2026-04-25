@@ -6,21 +6,24 @@ via :func:`get_stata_tools`, lets the LLM write and execute a do file that runs
 the baseline regression, then reports the core coefficient sign.
 
 The node enforces post-conditions (structured response schema, do/log files on
-disk, ``actual_sign`` within ``{"+", "-", "0"}``) and assembles
-:class:`RegressionResult` with a structured :class:`SignCheck`. Sign mismatch
-vs ``ModelPlan.core_hypothesis.expected_sign`` is **not** an error -- it is
-recorded as ``sign_check.consistent=False`` and ``workflow_status=success``.
+disk, successful Stata execution, and a deterministically parsed core
+coefficient sign) and assembles :class:`RegressionResult` with a structured
+:class:`SignCheck`. Sign mismatch vs ``ModelPlan.core_hypothesis.expected_sign``
+is **not** an error -- it is recorded as ``sign_check.consistent=False`` and
+``workflow_status=success``.
 """
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict, cast
 
 from langchain.agents import create_agent  # pyright: ignore[reportUnknownVariableType]
 from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field
 
 from harness_stata.clients.llm import get_chat_model
@@ -45,9 +48,6 @@ class _RegressionOutput(BaseModel):
 
     do_file_path: str = Field(description="Absolute path of the .do file written to disk.")
     log_file_path: str = Field(description="Absolute path of the .log file produced by Stata.")
-    actual_sign: Literal["+", "-", "0"] = Field(
-        description="Sign of the core explanatory variable's coefficient."
-    )
     summary: str = Field(description="Natural-language summary of regression output.")
 
 
@@ -107,14 +107,15 @@ def _build_human_prompt(
         f"log_file_path: {log_path}\n\n"
         "Write the do file to do_file_path, execute it (log must be produced at"
         " log_file_path via `log using`), then return the structured response"
-        " (do_file_path, log_file_path, actual_sign, summary)."
+        " (do_file_path, log_file_path, summary). The node will parse the"
+        " coefficient sign from the Stata log; do not report actual_sign yourself."
     )
 
 
 def _assert_file_exists(path_str: str, role: str) -> None:
     path = Path(path_str)
     if not path.exists():
-        msg = f"regression: LLM claimed {role} at {path_str!r} but file does not exist"
+        msg = f"regression: claimed {role} at {path_str!r} but file does not exist"
         raise RuntimeError(msg)
 
 
@@ -128,6 +129,91 @@ def _compute_sign_check(plan: ModelPlan, actual_sign: str) -> SignCheck:
         "actual_sign": actual_sign,
         "consistent": consistent,
     }
+
+
+def _coerce_execution_payload(raw: object) -> dict[str, Any] | None:
+    if isinstance(raw, dict) and "status" in raw:
+        return cast("dict[str, Any]", raw)
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict) and "status" in parsed:
+            return cast("dict[str, Any]", parsed)
+    return None
+
+
+def _payload_from_tool_message(message: ToolMessage) -> dict[str, Any] | None:
+    artifact_payload = _coerce_execution_payload(message.artifact)
+    if artifact_payload is not None:
+        return artifact_payload
+    content = cast("object", message.content)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    if isinstance(content, str):
+        return _coerce_execution_payload(content)
+    if isinstance(content, list):  # pyright: ignore[reportUnnecessaryIsInstance]
+        blocks = cast("list[object]", content)
+        for block in reversed(blocks):
+            if isinstance(block, str):
+                payload = _coerce_execution_payload(block)
+            elif isinstance(block, dict):
+                payload = _coerce_execution_payload(cast("dict[str, object]", block).get("text"))
+            else:
+                payload = None
+            if payload is not None:
+                return payload
+    return None
+
+
+def _is_run_do_message(message: ToolMessage) -> bool:
+    kwargs = cast("dict[str, object]", message.additional_kwargs)  # pyright: ignore[reportUnknownMemberType]
+    name = message.name or kwargs.get("name")
+    return isinstance(name, str) and name.endswith("run_do")
+
+
+def _extract_successful_run_do(messages: list[BaseMessage]) -> dict[str, Any]:
+    last_payload: dict[str, Any] | None = None
+    for message in messages:
+        if isinstance(message, ToolMessage) and _is_run_do_message(message):
+            payload = _payload_from_tool_message(message)
+            if payload is None:
+                raise RuntimeError("regression: could not parse run_do tool result")
+            last_payload = payload
+    if last_payload is None:
+        raise RuntimeError("regression: run_do was not executed")
+    if last_payload.get("status") != "succeeded":
+        details = last_payload.get("diagnostic_excerpt") or last_payload.get("summary")
+        raise RuntimeError(f"regression: run_do failed: {details or last_payload}")
+    return last_payload
+
+
+def _coefficient_pattern(variable_name: str) -> re.Pattern[str]:
+    number = r"(?P<coef>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
+    escaped = re.escape(variable_name)
+    return re.compile(
+        rf"^\s*{escaped}\s*(?:\|\s*|\s+){number}(?:\s+|$)",
+        re.IGNORECASE,
+    )
+
+
+def _parse_actual_sign(
+    *,
+    variable_name: str,
+    log_text: str,
+    result_text: str,
+) -> Literal["+", "-", "0"]:
+    pattern = _coefficient_pattern(variable_name)
+    for line in f"{log_text}\n{result_text}".splitlines():
+        match = pattern.search(line)
+        if match is None:
+            continue
+        coefficient = float(match.group("coef"))
+        if coefficient > 0:
+            return "+"
+        if coefficient < 0:
+            return "-"
+        return "0"
+    raise RuntimeError(f"regression: coefficient for {variable_name!r} not found in Stata output")
 
 
 class RegressionOutput(TypedDict):
@@ -194,7 +280,19 @@ async def regression(state: WorkflowState) -> RegressionOutput:
     _assert_file_exists(payload.do_file_path, "do_file_path")
     _assert_file_exists(payload.log_file_path, "log_file_path")
 
-    sign_check = _compute_sign_check(plan, payload.actual_sign)
+    messages_raw: object = result.get("messages")
+    messages = cast("list[BaseMessage]", messages_raw) if isinstance(messages_raw, list) else []
+    execution = _extract_successful_run_do(messages)
+    log_text = Path(payload.log_file_path).read_text(encoding="utf-8", errors="replace")
+    result_text_raw = execution.get("result_text")
+    result_text = result_text_raw if isinstance(result_text_raw, str) else ""
+    actual_sign = _parse_actual_sign(
+        variable_name=plan["core_hypothesis"]["variable_name"],
+        log_text=log_text,
+        result_text=result_text,
+    )
+
+    sign_check = _compute_sign_check(plan, actual_sign)
     regression_result: RegressionResult = {
         "do_file_path": payload.do_file_path,
         "log_file_path": payload.log_file_path,

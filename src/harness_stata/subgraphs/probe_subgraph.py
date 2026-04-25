@@ -39,6 +39,11 @@ from harness_stata.state import (
     VariableSource,
     WorkflowStatus,
 )
+from harness_stata.subgraphs._probe_helpers import (
+    build_download_filters,
+    replace_variable_in_model_plan,
+    replace_variable_in_spec,
+)
 
 # ---------------------------------------------------------------------------
 # Structured-output schema (used as create_agent response_format)
@@ -51,7 +56,9 @@ _OUTPUT_SPEC = """你的探测结论必须直接按给定 schema 的字段填写
 - soft 变量若没找到,但你在探测中发现了合理的替代变量,填写
   candidate_substitute_name / candidate_substitute_description / candidate_substitute_reason;
   否则三者留空。hard 变量不要填 substitute 字段。
-- filters 只写你在探测中确认过的时间/样本约束(例如 {"year": "2010-2020"})。
+- filters 不要写时间范围;运行时会从 EmpiricalSpec.time_range_start/end
+  自动生成 start_date/end_date。若 CSMAR 需要额外样本筛选,只允许填写
+  {"condition": "..."}。
 - 不要编造探测未覆盖的信息;不确定就留 null。
 """
 
@@ -223,10 +230,12 @@ def build_probe_subgraph(
                 meta = sub_meta.pop(current["name"])
                 report["variable_results"].append(_build_substituted_result(meta, current, finding))
                 if spec is not None:
-                    spec = _replace_variable_in_spec(spec, meta["original_name"], current)
+                    spec = replace_variable_in_spec(spec, meta["original_name"], current)
             else:
                 report["variable_results"].append(_build_found_result(current, finding))
-            _merge_into_manifest(manifest, current, finding)
+            if spec is None:
+                raise RuntimeError("probe_subgraph: empirical_spec is missing")
+            _merge_into_manifest(manifest, current, finding, spec)
         elif current["contract_type"] == "hard":
             report["variable_results"].append(_build_not_found_result(current["name"]))
             report["overall_status"] = "hard_failure"
@@ -269,6 +278,9 @@ def build_probe_subgraph(
         }
         if spec is not None:
             out["empirical_spec"] = spec
+        plan = state.get("model_plan")
+        if plan is not None:
+            out["model_plan"] = replace_variable_in_model_plan(plan, report["variable_results"])
         return out
 
     def _route_after_handler(
@@ -379,6 +391,7 @@ def _merge_into_manifest(
     manifest: DownloadManifest,
     current: VariableDefinition,
     finding: _VariableProbeFindingModel,
+    spec: EmpiricalSpec,
 ) -> None:
     """Append a new DownloadTask or merge into an existing one by (database, table)."""
     database = finding.database or ""
@@ -386,7 +399,7 @@ def _merge_into_manifest(
     field = finding.field or ""
     var_name = current["name"]
     key_fields = list(finding.key_fields or [])
-    raw_filters = finding.filters or {}
+    filters_typed = build_download_filters(spec, finding.filters)
 
     for item in manifest["items"]:
         if item["database"] == database and item["table"] == table:
@@ -397,13 +410,10 @@ def _merge_into_manifest(
             for kf in key_fields:
                 if kf not in item["key_fields"]:
                     item["key_fields"].append(kf)
-            for k, v in raw_filters.items():
+            for k, v in filters_typed.items():
                 item["filters"][k] = v
             return
 
-    filters_typed: dict[str, object] = {}
-    for k, v in raw_filters.items():
-        filters_typed[k] = v
     manifest["items"].append(
         DownloadTask(
             database=database,
@@ -413,23 +423,6 @@ def _merge_into_manifest(
             variable_names=[var_name] if var_name else [],
             filters=filters_typed,
         )
-    )
-
-
-def _replace_variable_in_spec(
-    spec: EmpiricalSpec, original_name: str, substitute: VariableDefinition
-) -> EmpiricalSpec:
-    new_vars: list[VariableDefinition] = [
-        substitute if v["name"] == original_name else v for v in spec["variables"]
-    ]
-    return EmpiricalSpec(
-        topic=spec["topic"],
-        variables=new_vars,
-        sample_scope=spec["sample_scope"],
-        time_range_start=spec["time_range_start"],
-        time_range_end=spec["time_range_end"],
-        data_frequency=spec["data_frequency"],
-        analysis_granularity=spec["analysis_granularity"],
     )
 
 

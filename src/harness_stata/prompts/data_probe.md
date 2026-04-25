@@ -26,7 +26,9 @@
 探测完成后,你的结论会被运行时 schema 强制结构化为以下字段,按实际情况填写即可:
 
 - `status`:`found` 或 `not_found`
-- 如果找到:`database` / `table` / `field` / `key_fields` / `filters` / `record_count`
+- 如果找到:`database` / `table` / `field` / `key_fields` / `record_count`
+- `filters` 不要填写时间范围;运行时会根据用户需求自动生成 `start_date` / `end_date`
+- 若 CSMAR 需要额外样本筛选,`filters` 仅允许填写 `condition`,例如 `{"condition": "Markettype in (1,4)"}`。
 - 如果没找到:上述字段留空
 
 ## Hard / Soft 差异

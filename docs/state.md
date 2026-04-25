@@ -10,7 +10,7 @@
 
 | 子图       | 从主图读入                              | 写回主图                                                                                   | 子图内部（不泄漏）                                                                   |
 | ---------- | --------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| 数据探针   | EmpiricalSpec, ModelPlan                | ProbeReport, DownloadManifest, EmpiricalSpec\*(回写), workflow_status\*(hard_failure 时)   | variable_queue, current_variable, per_variable_call_count, messages, substitute_meta |
+| 数据探针   | EmpiricalSpec, ModelPlan                | ProbeReport, DownloadManifest, EmpiricalSpec/ModelPlan\*(Soft 替代时回写), workflow_status\*(hard_failure 时) | variable_queue, current_variable, per_variable_call_count, messages, substitute_meta |
 | 数据清洗   | EmpiricalSpec, DownloadedFiles          | MergedDataset                                                           | messages, iteration_count                                           |
 | 描述性统计 | EmpiricalSpec, ModelPlan, MergedDataset | DescStatsReport                                                         | messages, iteration_count                                           |
 | 基准回归   | ModelPlan, MergedDataset                | RegressionResult                                                        | messages, iteration_count                                           |
@@ -161,7 +161,7 @@
 | key_fields      | list[str] | 主键/时间键字段（探针下钻 schema 后确定）   |
 | variable_fields | list[str] | 变量字段                                    |
 | variable_names  | list[str] | 对应的变量名（与 variable_fields 一一对应） |
-| filters         | dict      | 过滤条件（时间范围、样本筛选等）            |
+| filters         | dict      | 严格过滤条件：必含 `start_date` / `end_date`（`YYYY-MM-DD`），可选 `condition` |
 
 #### hitl_decision
 
@@ -229,5 +229,5 @@
 | ------------- | ---- | -------------- |
 | variable_name | str  | 核心解释变量名 |
 | expected_sign | str  | 预期符号       |
-| actual_sign   | str  | 实际符号       |
+| actual_sign   | str  | 节点从 Stata log / result_text 确定性解析出的实际符号 |
 | consistent    | bool | 是否一致       |

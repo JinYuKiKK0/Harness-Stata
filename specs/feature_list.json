@@ -23,7 +23,7 @@
       "description": "src/harness_stata 包结构与 pyproject.toml 完成，dev 依赖安装通过",
       "steps": [
         "创建 src/harness_stata 下 nodes/subgraphs/prompts/clients 包结构与 __init__.py",
-        "pyproject.toml 声明 langgraph/langchain/langchain-community/pandas/typer 与 dev 依赖",
+        "pyproject.toml 声明 langgraph/langchain/langchain-openai/pandas/typer 与 dev 依赖",
         "uv sync 或 pip install -e .[dev] 安装通过且可导入"
       ],
       "depends_on": ["F01"],
@@ -78,7 +78,7 @@
       "id": "F07",
       "description": "clients/llm.py 暴露 get_chat_model() 作为唯一 LLM SDK 入口（import-linter 强制）",
       "steps": [
-        "通过 langchain-community 集成 ChatTongyi（qwen-plus）",
+        "通过 langchain-openai 的 ChatOpenAI 调用 DashScope/OpenAI 兼容接口",
         "暴露 get_chat_model() 返回 BaseChatModel",
         "import-linter LLM 单一入口契约通过"
       ],
@@ -208,9 +208,9 @@
     },
     {
       "id": "F19",
-      "description": "subgraphs/generic_react.py 提供 build_react_subgraph(tools, prompt, max_iterations) 复用骨架",
+      "description": "节点 6/7/8 统一迁移为内联 create_agent(tools, prompt, max_iterations) 执行骨架",
       "steps": [
-        "agent + tool_executor 双节点 + should_continue 条件边",
+        "各节点用 create_agent 承担模型循环与工具执行",
         "max_iterations 安全兜底",
         "单元测试覆盖正常完成与强制截断两种出口"
       ],
@@ -219,9 +219,9 @@
     },
     {
       "id": "F20",
-      "description": "nodes/data_cleaning.py 借 generic_react + 文件 IO + Python 执行工具完成跨表合并产出单一长表",
+      "description": "nodes/data_cleaning.py 借 create_agent + DuckDB SQL 工具完成跨表合并产出单一长表",
       "steps": [
-        "工具集绑定（文件读写 + Python 执行）",
+        "工具集绑定（DuckDB run_sql）",
         "prompt 撰写：跨表主键对齐、宽长表转换、列名规范",
         "post-condition 校验主键唯一性与关键字段覆盖率",
         "输出 MergedDataset csv 路径"
@@ -231,7 +231,7 @@
     },
     {
       "id": "F21",
-      "description": "nodes/descriptive_stats.py 借 generic_react + stata-executor 完成描述性统计与逻辑校验",
+      "description": "nodes/descriptive_stats.py 借 create_agent + stata-executor 完成描述性统计与逻辑校验",
       "steps": [
         "工具集绑定（文件读写 + stata-executor）",
         "prompt 撰写：描述性统计、缺失与极值扫描、逻辑校验",
@@ -242,7 +242,7 @@
     },
     {
       "id": "F22",
-      "description": "nodes/regression.py 借 generic_react + stata-executor 完成基准回归并对照预期符号基准线",
+      "description": "nodes/regression.py 借 create_agent + stata-executor 完成基准回归并对照预期符号基准线",
       "steps": [
         "工具集绑定（文件读写 + stata-executor）",
         "按 ModelPlan 编写 do 代码执行基准回归",
@@ -308,7 +308,7 @@
       "description": "packages 下外部 MCP 改造为独立 git submodule，主项目依赖和门禁切换到新源码路径",
       "steps": [
         "提交并推送 csmar-mcp 与 stata-executor 两个独立仓库的当前源码状态",
-        "主仓库删除旧 packages/csmar-mcp 与 packages/stata-executor tracked 源码目录",
+        "主仓库删除旧 MCP tracked 源码目录",
         "主仓库添加 .gitmodules，并以 gitlink 跟踪 csmar-mcp 与 stata-executor",
         "pyproject.toml、scripts/check.py、clients 文档和项目文档全部切换到新 submodule 路径",
         "uv sync --extra dev、scripts/check.py、导入验证与 git submodule status 验证通过"

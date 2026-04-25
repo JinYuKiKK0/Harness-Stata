@@ -55,6 +55,7 @@ class DataProbeOutput(TypedDict, total=False):
     probe_report: ProbeReport
     download_manifest: DownloadManifest
     empirical_spec: EmpiricalSpec
+    model_plan: ModelPlan
     workflow_status: Literal["failed_hard_contract"]
 
 
@@ -95,6 +96,9 @@ async def data_probe(state: WorkflowState) -> DataProbeOutput:
     final_spec = final.get("empirical_spec")
     if final_spec is not None and final_spec is not spec:
         result["empirical_spec"] = final_spec
+    final_plan = final.get("model_plan")
+    if final_plan is not None and final_plan is not model_plan:
+        result["model_plan"] = final_plan
     if final.get("workflow_status") == "failed_hard_contract":
         result["workflow_status"] = "failed_hard_contract"
     return result

@@ -15,7 +15,6 @@ from pytest_mock import MockerFixture
 from harness_stata.nodes.data_download import data_download
 from harness_stata.state import DownloadManifest, DownloadTask, WorkflowState
 
-
 # ---------------------------------------------------------------------------
 # Test helpers
 # ---------------------------------------------------------------------------
@@ -87,6 +86,7 @@ def test_data_download_single_task_success(
     probe_tool, mat_tool = _patch_csmar(mocker, probe=probe, materialize=materialize)
 
     manifest = make_download_manifest()
+    manifest["items"][0]["filters"]["condition"] = "Markettype in (1,4)"
     state: WorkflowState = {"download_manifest": manifest}
 
     out = _run(state)
@@ -109,6 +109,7 @@ def test_data_download_single_task_success(
     assert set(probe_payload["columns"]) == {"SYMBOL", "ACCYEAR", "A001000000", "A002100000"}
     assert probe_payload["start_date"] == "2015-01-01"
     assert probe_payload["end_date"] == "2022-12-31"
+    assert probe_payload["condition"] == "Markettype in (1,4)"
     assert mat_tool.ainvoke.call_count == 1
     mat_payload: dict[str, Any] = mat_tool.ainvoke.call_args.args[0]
     assert mat_payload["validation_id"] == "v1"
@@ -230,5 +231,41 @@ def test_data_download_empty_manifest_raises(
 
     with pytest.raises(ValueError, match="non-empty"):
         _run(state)
+    assert probe.await_count == 0
+    assert materialize.await_count == 0
+
+
+def test_data_download_missing_required_date_filter_raises(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    make_download_manifest: Callable[..., DownloadManifest],
+) -> None:
+    _patch_settings(mocker, tmp_path)
+    probe = AsyncMock()
+    materialize = AsyncMock()
+    _patch_csmar(mocker, probe=probe, materialize=materialize)
+    manifest = make_download_manifest()
+    del manifest["items"][0]["filters"]["start_date"]
+
+    with pytest.raises(RuntimeError, match=r"filters\.start_date"):
+        _run({"download_manifest": manifest})
+    assert probe.await_count == 0
+    assert materialize.await_count == 0
+
+
+def test_data_download_invalid_date_filter_raises(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    make_download_manifest: Callable[..., DownloadManifest],
+) -> None:
+    _patch_settings(mocker, tmp_path)
+    probe = AsyncMock()
+    materialize = AsyncMock()
+    _patch_csmar(mocker, probe=probe, materialize=materialize)
+    manifest = make_download_manifest()
+    manifest["items"][0]["filters"]["end_date"] = "2022"
+
+    with pytest.raises(RuntimeError, match=r"filters\.end_date"):
+        _run({"download_manifest": manifest})
     assert probe.await_count == 0
     assert materialize.await_count == 0

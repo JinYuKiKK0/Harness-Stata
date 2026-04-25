@@ -34,7 +34,7 @@
 - **运行时**：Python 3.12
 - **编排**：langgraph、langchain、langchain-core
 - **观测 / 调试**：LangSmith Studio（本地 Agent Server）
-- **LLM**：DashScope ChatTongyi（qwen-plus），通过 `langchain-community`
+- **LLM**：通过 `langchain-openai` 的 `ChatOpenAI` 调用 DashScope/OpenAI 兼容接口
 - **MCP 集成**：`langchain-mcp-adapters`，经 stdio MCP 协议调用 `csmar-mcp` 与 `stata-executor` submodule
 - **数据处理**：pandas
 - **CLI**：typer
@@ -50,15 +50,13 @@ src/harness_stata/
 ├── config.py        # 配置
 ├── cli.py           # typer CLI 入口
 ├── nodes/           # 8 个主图节点
-├── subgraphs/       # 可复用 ReAct 子图工厂
-│   ├── generic_react.py   # build_react_subgraph(tools, prompt, max_iters)
+├── subgraphs/       # 数据探针子图工厂
 │   └── probe_subgraph.py  # build_probe_subgraph(tools, per_variable_max_calls)
 ├── prompts/         # Markdown system prompts
 └── clients/         # 外部依赖统一入口（csmar / stata / llm）
 
-packages/
-├── CSMAR-Data-MCP/      # CSMAR 数据获取 MCP submodule
-└── Stata-Executor-MCP/  # Stata 执行 MCP submodule
+csmar-mcp/          # CSMAR 数据获取 MCP submodule
+stata-executor/     # Stata 执行 MCP submodule
 ```
 
 ### 分层约束（import-linter 强制）
@@ -68,7 +66,7 @@ packages/
 - `graph.py` 不得直接 import `subgraphs/`
 - `subgraphs/` 不得 import `nodes/`
 - `nodes/` 与 `subgraphs/` 不得直连 `csmar_mcp` / `stata_executor` / `csmarapi`，必须经 `clients/` 的 MCP 协议入口
-- 仅 `clients/llm.py` 可 import `langchain_community`
+- 仅 `clients/llm.py` 可 import `langchain_openai`
 
 ## 快速开始
 
@@ -85,6 +83,7 @@ uv sync --all-extras
 ```
 必填
 DASHSCOPE_API_KEY=
+LLM_BASE_URL=https://your-openai-compatible-endpoint/v1
 CSMAR_ACCOUNT=      # CSMAR账号
 CSMAR_PASSWORD=     # CSMAR密码
 STATA_EXECUTOR_STATA_EXECUTABLE='C:/Program Files/Stata17/StataMP-64.exe'   Stata执行程序路径

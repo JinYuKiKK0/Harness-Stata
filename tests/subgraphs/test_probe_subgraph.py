@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from langchain_core.tools import tool
 
-from harness_stata.state import EmpiricalSpec, VariableDefinition
+from harness_stata.state import EmpiricalSpec, ModelPlan, VariableDefinition
+from harness_stata.subgraphs._probe_helpers import normalize_time_bound
 from harness_stata.subgraphs.probe_subgraph import (
-    ProbeState,
     _VariableProbeFindingModel,
     build_probe_subgraph,
 )
@@ -74,6 +74,19 @@ def _spec(variables: list[VariableDefinition]) -> EmpiricalSpec:
     )
 
 
+def _plan(variable_name: str = "ROE") -> ModelPlan:
+    return {
+        "model_type": "OLS",
+        "equation": "Y = a + b*ROE + e",
+        "core_hypothesis": {
+            "variable_name": variable_name,
+            "expected_sign": "+",
+            "rationale": "r",
+        },
+        "data_structure_requirements": ["ROE must be available"],
+    }
+
+
 def _found(
     *,
     database: str = "CSMAR",
@@ -90,7 +103,7 @@ def _found(
         field=field,
         record_count=record_count,
         key_fields=key_fields if key_fields is not None else ["stkcd", "year"],
-        filters=filters if filters is not None else {"year": "2010-2020"},
+        filters=filters if filters is not None else None,
     )
 
 
@@ -123,6 +136,17 @@ class TestInputValidation:
             build_probe_subgraph(tools=[csmar_probe], prompt="p", per_variable_max_calls=0)
 
 
+class TestTimeBounds:
+    def test_normalize_year_month_date_and_quarter(self) -> None:
+        assert normalize_time_bound("2010", is_start=True) == "2010-01-01"
+        assert normalize_time_bound("2010", is_start=False) == "2010-12-31"
+        assert normalize_time_bound("2010-02", is_start=True) == "2010-02-01"
+        assert normalize_time_bound("2010-02", is_start=False) == "2010-02-28"
+        assert normalize_time_bound("2012-02-03", is_start=True) == "2012-02-03"
+        assert normalize_time_bound("2012Q4", is_start=True) == "2012-10-01"
+        assert normalize_time_bound("2012Q4", is_start=False) == "2012-12-31"
+
+
 # ---------------------------------------------------------------------------
 # Empty queue: no LLM invocation, downstream slices initialized
 # ---------------------------------------------------------------------------
@@ -130,9 +154,7 @@ class TestInputValidation:
 
 class TestEmptyQueue:
     def test_empty_variables_list_skips_llm(self) -> None:
-        graph = build_probe_subgraph(
-            tools=[csmar_probe], prompt="sys", per_variable_max_calls=3
-        )
+        graph = build_probe_subgraph(tools=[csmar_probe], prompt="sys", per_variable_max_calls=3)
         result = asyncio.run(graph.ainvoke({"empirical_spec": _spec([])}))
 
         assert result["queue_initialized"] is True
@@ -156,9 +178,7 @@ class TestFoundSingleVariable:
         finding = _found(database="CSMAR", table="TRD", field="ROA", record_count=12345)
         _wire_agent(mocker, findings=[finding])
 
-        graph = build_probe_subgraph(
-            tools=[csmar_probe], prompt="p", per_variable_max_calls=3
-        )
+        graph = build_probe_subgraph(tools=[csmar_probe], prompt="p", per_variable_max_calls=3)
         result = asyncio.run(graph.ainvoke({"empirical_spec": _spec([_var("ROA")])}))
 
         report = result["probe_report"]
@@ -179,19 +199,19 @@ class TestFoundSingleVariable:
         assert items[0]["variable_fields"] == ["ROA"]
         assert items[0]["variable_names"] == ["ROA"]
         assert items[0]["key_fields"] == ["stkcd", "year"]
+        assert items[0]["filters"] == {
+            "start_date": "2010-01-01",
+            "end_date": "2020-12-31",
+        }
 
 
 class TestHardNotFound:
     def test_hard_not_found_routes_end_with_workflow_status(self, mocker: Any) -> None:
         _wire_agent(mocker, findings=[_not_found()])
 
-        graph = build_probe_subgraph(
-            tools=[csmar_probe], prompt="p", per_variable_max_calls=3
-        )
+        graph = build_probe_subgraph(tools=[csmar_probe], prompt="p", per_variable_max_calls=3)
         result = asyncio.run(
-            graph.ainvoke(
-                {"empirical_spec": _spec([_var("ROA", contract="hard"), _var("LEV")])}
-            )
+            graph.ainvoke({"empirical_spec": _spec([_var("ROA", contract="hard"), _var("LEV")])})
         )
 
         report = result["probe_report"]
@@ -216,11 +236,9 @@ class TestSoftSubstituteSuccess:
         finding2 = _found(database="CSMAR", table="TRD", field="ROA")
         _wire_agent(mocker, findings=[finding1, finding2])
 
-        graph = build_probe_subgraph(
-            tools=[csmar_probe], prompt="p", per_variable_max_calls=3
-        )
+        graph = build_probe_subgraph(tools=[csmar_probe], prompt="p", per_variable_max_calls=3)
         roe = _var("ROE", role="control", contract="soft")
-        result = asyncio.run(graph.ainvoke({"empirical_spec": _spec([roe])}))
+        result = asyncio.run(graph.ainvoke({"empirical_spec": _spec([roe]), "model_plan": _plan()}))
 
         report = result["probe_report"]
         assert report["overall_status"] == "success"
@@ -237,6 +255,9 @@ class TestSoftSubstituteSuccess:
         spec_vars = [v["name"] for v in result["empirical_spec"]["variables"]]
         assert "ROA" in spec_vars
         assert "ROE" not in spec_vars
+        assert result["model_plan"]["equation"] == "Y = a + b*ROA + e"
+        assert result["model_plan"]["core_hypothesis"]["variable_name"] == "ROA"
+        assert result["model_plan"]["data_structure_requirements"] == ["ROA must be available"]
 
         items = result["download_manifest"]["items"]
         assert len(items) == 1
@@ -251,9 +272,7 @@ class TestSoftSubstituteFailure:
         finding2 = _not_found()
         mock_create = _wire_agent(mocker, findings=[finding1, finding2])
 
-        graph = build_probe_subgraph(
-            tools=[csmar_probe], prompt="p", per_variable_max_calls=3
-        )
+        graph = build_probe_subgraph(tools=[csmar_probe], prompt="p", per_variable_max_calls=3)
         roe = _var("ROE", role="control", contract="soft")
         result = asyncio.run(graph.ainvoke({"empirical_spec": _spec([roe])}))
 
@@ -274,13 +293,9 @@ class TestMultiVariableSameTable:
         finding2 = _found(database="CSMAR", table="TRD", field="LEV")
         _wire_agent(mocker, findings=[finding1, finding2])
 
-        graph = build_probe_subgraph(
-            tools=[csmar_probe], prompt="p", per_variable_max_calls=3
-        )
+        graph = build_probe_subgraph(tools=[csmar_probe], prompt="p", per_variable_max_calls=3)
         result = asyncio.run(
-            graph.ainvoke(
-                {"empirical_spec": _spec([_var("ROA"), _var("LEV", role="control")])}
-            )
+            graph.ainvoke({"empirical_spec": _spec([_var("ROA"), _var("LEV", role="control")])})
         )
 
         items = result["download_manifest"]["items"]

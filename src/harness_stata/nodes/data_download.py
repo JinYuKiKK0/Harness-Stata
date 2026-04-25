@@ -10,13 +10,14 @@ whose materialize call raises aborts the entire node with a RuntimeError;
 partial-success semantics are deliberately not supported so that downstream
 nodes can assume the full variable set is present.
 
-Filters currently honoured: ``start_date`` / ``end_date`` only. Other keys in
-``DownloadTask.filters`` are ignored for the MVP — revisit when F20 surfaces
-a concrete case needing CSMAR condition-string passthrough.
+Filters are a strict contract: every task must carry ``start_date`` and
+``end_date`` in ``YYYY-MM-DD`` form. Optional ``condition`` is passed through to
+CSMAR's probe tool.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,6 +43,7 @@ from harness_stata.state import (
 _PROBE_TOOL_NAME = "csmar_probe_query"
 _MATERIALIZE_TOOL_NAME = "csmar_materialize_query"
 _SESSION_TS_FORMAT = "%Y%m%dT%H%M%SZ"
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 # ---------------------------------------------------------------------------
@@ -90,14 +92,21 @@ def _build_probe_payload(task: DownloadTask) -> dict[str, object]:
     payload: dict[str, object] = {
         "table_code": task["table"],
         "columns": columns,
+        "start_date": _require_date_filter(task, "start_date"),
+        "end_date": _require_date_filter(task, "end_date"),
     }
-    start_date = task["filters"].get("start_date")
-    end_date = task["filters"].get("end_date")
-    if isinstance(start_date, str) and start_date:
-        payload["start_date"] = start_date
-    if isinstance(end_date, str) and end_date:
-        payload["end_date"] = end_date
+    condition = task["filters"].get("condition")
+    if isinstance(condition, str) and condition.strip():
+        payload["condition"] = condition.strip()
     return payload
+
+
+def _require_date_filter(task: DownloadTask, key: str) -> str:
+    value = task["filters"].get(key)
+    if not isinstance(value, str) or not _DATE_RE.fullmatch(value):
+        msg = f"DownloadTask for table {task['table']} must include filters.{key} as YYYY-MM-DD"
+        raise RuntimeError(msg)
+    return value
 
 
 def _coerce_dict(raw: object, context: str) -> dict[str, Any]:

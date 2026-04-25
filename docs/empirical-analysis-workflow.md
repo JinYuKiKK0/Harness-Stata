@@ -53,9 +53,9 @@ START
 
 ### ReAct 子图设计
 
-#### 通用 ReAct 骨架（节点 6/7/8）
+#### 内联 create_agent（节点 6/7/8）
 
-节点 6（数据清洗）、7（描述性统计）、8（基准回归）共享同一套 ReAct 子图骨架。tool 调用限制仅作为防止 LLM 空转烧 token 的安全兜底，全局 `max_iterations` 截断即可。
+节点 6（数据清洗）、7（描述性统计）、8（基准回归）各自在节点内调用 `langchain.agents.create_agent`。tool 调用限制仅作为防止 LLM 空转烧 token 的安全兜底，全局 `max_iterations` 截断即可。
 
 ```
 subgraph START
@@ -70,7 +70,7 @@ subgraph START
             → END (正常完成)
 ```
 
-子图内两个节点 + 一条条件边：
+LangChain agent 内部负责模型循环与工具执行：
 
 | 节点          | 类型 | 职责                        |
 | ------------- | ---- | --------------------------- |

@@ -33,18 +33,13 @@
    - 其它类型按方程选择对应命令
 4. do 文件内部**必须**用 `log using "<log_file_path>", replace text` 开启日志,末尾 `log close`,日志格式为 text。
 5. 落盘 do 文件到 `<session_dir>/regression.do`,再 `run_do` 执行;若 `status=failed`,阅读 `diagnostic_excerpt` 修正后重试。
-6. 从 log / `result_text` 中找到核心解释变量(`core_hypothesis.variable_name`)的系数(Coef.);根据数值正负决定 `actual_sign`:
-   - 系数为正且非零 → `"+"`
-   - 系数为负且非零 → `"-"`
-   - 系数极小(约等于 0)或不显著(`p > 0.1` 且系数很小) → `"0"`
-   - **符号判读只看数值方向,不做"与预期一致才填"的自我审查**;即使与 `expected_sign` 冲突,也如实回填。
+6. 不要自行回填核心系数符号;节点会从 Stata log / `result_text` 中确定性解析核心解释变量(`core_hypothesis.variable_name`)的系数方向。
 
 ## 终止输出
 
 完成后按运行时 schema 返回:
 
 - `do_file_path` / `log_file_path`:与节点传入的绝对路径一致,两文件都必须真实落盘,否则节点将 raise。
-- `actual_sign`:**必须**恰好是 `"+"` / `"-"` / `"0"` 三者之一。
 - `summary`:核心系数估计值与 t/p 值 + 是否显著 + 与预期符号对比的自然语言概述(3-6 句);节点会原样写入 `RegressionResult.summary`。
 
-节点接到响应后会:(1) 验证两个文件存在;(2) 对照 `expected_sign` 生成 `SignCheck.consistent`——**符号不一致不是错误**,只是实证结果本身,如实回填即可。
+节点接到响应后会:(1) 验证两个文件存在;(2) 验证 `run_do` 成功;(3) 从 log/result_text 解析核心变量系数符号并生成 `SignCheck.consistent`——**符号不一致不是错误**,只是实证结果本身。

@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from pytest_mock import MockerFixture
 
@@ -31,6 +33,7 @@ def _patch_env(
     mocker: MockerFixture,
     *,
     payload: _RegressionOutput | None = None,
+    messages: list[ToolMessage] | None = None,
     raise_truncation: bool = False,
 ) -> MagicMock:
     """Patch create_agent + get_stata_tools at the regression module."""
@@ -41,7 +44,10 @@ def _patch_env(
         assert payload is not None
         fake_agent = MagicMock()
         fake_agent.ainvoke = AsyncMock(
-            return_value={"messages": [], "structured_response": payload}
+            return_value={
+                "messages": messages if messages is not None else [_run_do_message()],
+                "structured_response": payload,
+            }
         )
     mocker.patch(
         "harness_stata.nodes.regression.create_agent",
@@ -60,14 +66,21 @@ def _make_session_dir(tmp_path: Path) -> Path:
     return session_dir
 
 
-def _write_artifacts(session_dir: Path) -> tuple[Path, Path, Path]:
+def _write_artifacts(session_dir: Path, coefficient: str = ".500") -> tuple[Path, Path, Path]:
     """Create merged.csv + regression.do + regression.log under session_dir."""
     merged_csv = session_dir / "merged.csv"
     merged_csv.write_text("stkcd,year,roa,digital\n1,2020,0.1,0.5\n", encoding="utf-8")
     do_file = session_dir / "regression.do"
     do_file.write_text("reg roa digital\n", encoding="utf-8")
     log_file = session_dir / "regression.log"
-    log_file.write_text("(stata log stub)\n", encoding="utf-8")
+    log_file.write_text(
+        f"      Source |       SS           df       MS\n"
+        f"-------------+----------------------------------\n"
+        f"         ROA |      Coef.   Std. Err.      t    P>|t|\n"
+        f"-------------+----------------------------------\n"
+        f"     DIGITAL |      {coefficient}      .100     5.00   0.000\n",
+        encoding="utf-8",
+    )
     return merged_csv, do_file, log_file
 
 
@@ -92,14 +105,37 @@ def _run(state: WorkflowState) -> dict[str, Any]:
     return asyncio.run(regression(state))
 
 
-def _payload(
-    do_file: Path, log_file: Path, actual_sign: Literal["+", "-", "0"]
-) -> _RegressionOutput:
+def _payload(do_file: Path, log_file: Path) -> _RegressionOutput:
     return _RegressionOutput(
         do_file_path=str(do_file),
         log_file_path=str(log_file),
-        actual_sign=actual_sign,
         summary="Core coefficient estimated; see log for details.",
+    )
+
+
+def _run_do_message(
+    *,
+    status: str = "succeeded",
+    result_text: str = "",
+    diagnostic_excerpt: str = "",
+) -> ToolMessage:
+    payload = {
+        "status": status,
+        "phase": "run",
+        "exit_code": 0 if status == "succeeded" else 1,
+        "error_kind": None if status == "succeeded" else "stata_error",
+        "summary": "ok" if status == "succeeded" else "failed",
+        "result_text": result_text,
+        "diagnostic_excerpt": diagnostic_excerpt,
+        "error_signature": None,
+        "failed_command": None,
+        "artifacts": [],
+        "elapsed_ms": 1,
+    }
+    return ToolMessage(
+        content=json.dumps(payload),
+        name="run_do",
+        tool_call_id="call-run-do",
     )
 
 
@@ -115,8 +151,8 @@ def test_regression_success_sign_consistent(
     make_model_plan: Callable[..., ModelPlan],
 ) -> None:
     session_dir = _make_session_dir(tmp_path)
-    merged_csv, do_file, log_file = _write_artifacts(session_dir)
-    _patch_env(mocker, payload=_payload(do_file, log_file, "+"))
+    merged_csv, do_file, log_file = _write_artifacts(session_dir, ".500")
+    _patch_env(mocker, payload=_payload(do_file, log_file))
 
     state = _base_state(make_empirical_spec(), make_model_plan(), _make_merged(merged_csv))
     out = _run(state)
@@ -141,8 +177,8 @@ def test_regression_success_sign_inconsistent_does_not_raise(
 ) -> None:
     """Sign mismatch is a valid empirical outcome, not an error."""
     session_dir = _make_session_dir(tmp_path)
-    merged_csv, do_file, log_file = _write_artifacts(session_dir)
-    _patch_env(mocker, payload=_payload(do_file, log_file, "-"))
+    merged_csv, do_file, log_file = _write_artifacts(session_dir, "-.500")
+    _patch_env(mocker, payload=_payload(do_file, log_file))
 
     state = _base_state(make_empirical_spec(), make_model_plan(), _make_merged(merged_csv))
     out = _run(state)
@@ -161,8 +197,8 @@ def test_regression_success_sign_ambiguous_always_consistent(
     make_model_plan: Callable[..., ModelPlan],
 ) -> None:
     session_dir = _make_session_dir(tmp_path)
-    merged_csv, do_file, log_file = _write_artifacts(session_dir)
-    _patch_env(mocker, payload=_payload(do_file, log_file, "+"))
+    merged_csv, do_file, log_file = _write_artifacts(session_dir, ".500")
+    _patch_env(mocker, payload=_payload(do_file, log_file))
 
     plan = make_model_plan(
         core_hypothesis={
@@ -178,6 +214,22 @@ def test_regression_success_sign_ambiguous_always_consistent(
     assert sign_check["expected_sign"] == "ambiguous"
     assert sign_check["actual_sign"] == "+"
     assert sign_check["consistent"] is True
+
+
+def test_regression_success_zero_sign_from_log(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    make_empirical_spec: Callable[..., EmpiricalSpec],
+    make_model_plan: Callable[..., ModelPlan],
+) -> None:
+    session_dir = _make_session_dir(tmp_path)
+    merged_csv, do_file, log_file = _write_artifacts(session_dir, "0.000")
+    _patch_env(mocker, payload=_payload(do_file, log_file))
+
+    state = _base_state(make_empirical_spec(), make_model_plan(), _make_merged(merged_csv))
+    out = _run(state)
+
+    assert out["regression_result"]["sign_check"]["actual_sign"] == "0"
 
 
 # ---------------------------------------------------------------------------
@@ -214,10 +266,76 @@ def test_regression_log_file_missing_raises(
     do_file = session_dir / "regression.do"
     do_file.write_text("reg roa digital\n", encoding="utf-8")
     missing_log = session_dir / "regression.log"  # deliberately NOT created
-    _patch_env(mocker, payload=_payload(do_file, missing_log, "+"))
+    _patch_env(mocker, payload=_payload(do_file, missing_log))
 
     state = _base_state(make_empirical_spec(), make_model_plan(), _make_merged(merged_csv))
     with pytest.raises(RuntimeError, match="log_file_path"):
+        _run(state)
+
+
+def test_regression_run_do_failure_raises(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    make_empirical_spec: Callable[..., EmpiricalSpec],
+    make_model_plan: Callable[..., ModelPlan],
+) -> None:
+    session_dir = _make_session_dir(tmp_path)
+    merged_csv, do_file, log_file = _write_artifacts(session_dir)
+    _patch_env(
+        mocker,
+        payload=_payload(do_file, log_file),
+        messages=[_run_do_message(status="failed", diagnostic_excerpt="variable not found")],
+    )
+
+    state = _base_state(make_empirical_spec(), make_model_plan(), _make_merged(merged_csv))
+    with pytest.raises(RuntimeError, match="run_do failed"):
+        _run(state)
+
+
+def test_regression_missing_run_do_raises(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    make_empirical_spec: Callable[..., EmpiricalSpec],
+    make_model_plan: Callable[..., ModelPlan],
+) -> None:
+    session_dir = _make_session_dir(tmp_path)
+    merged_csv, do_file, log_file = _write_artifacts(session_dir)
+    _patch_env(mocker, payload=_payload(do_file, log_file), messages=[])
+
+    state = _base_state(make_empirical_spec(), make_model_plan(), _make_merged(merged_csv))
+    with pytest.raises(RuntimeError, match="run_do was not executed"):
+        _run(state)
+
+
+def test_regression_unparseable_tool_message_raises(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    make_empirical_spec: Callable[..., EmpiricalSpec],
+    make_model_plan: Callable[..., ModelPlan],
+) -> None:
+    session_dir = _make_session_dir(tmp_path)
+    merged_csv, do_file, log_file = _write_artifacts(session_dir)
+    bad_message = ToolMessage(content="not json", name="run_do", tool_call_id="bad")
+    _patch_env(mocker, payload=_payload(do_file, log_file), messages=[bad_message])
+
+    state = _base_state(make_empirical_spec(), make_model_plan(), _make_merged(merged_csv))
+    with pytest.raises(RuntimeError, match="could not parse"):
+        _run(state)
+
+
+def test_regression_core_coefficient_missing_raises(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    make_empirical_spec: Callable[..., EmpiricalSpec],
+    make_model_plan: Callable[..., ModelPlan],
+) -> None:
+    session_dir = _make_session_dir(tmp_path)
+    merged_csv, do_file, log_file = _write_artifacts(session_dir)
+    log_file.write_text("ROA | .100 .010 10.00 0.000\n", encoding="utf-8")
+    _patch_env(mocker, payload=_payload(do_file, log_file))
+
+    state = _base_state(make_empirical_spec(), make_model_plan(), _make_merged(merged_csv))
+    with pytest.raises(RuntimeError, match="coefficient"):
         _run(state)
 
 
