@@ -35,7 +35,7 @@
 - **编排**：langgraph、langchain、langchain-core
 - **观测 / 调试**：LangSmith Studio（本地 Agent Server）
 - **LLM**：DashScope ChatTongyi（qwen-plus），通过 `langchain-community`
-- **MCP 集成**：`langchain-mcp-adapters`，经 stdio MCP 协议调用 `packages/CSMAR-Data-MCP` 与 `packages/Stata-Executor-MCP` submodule
+- **MCP 集成**：`langchain-mcp-adapters`，经 stdio MCP 协议调用 `csmar-mcp` 与 `stata-executor` submodule
 - **数据处理**：pandas
 - **CLI**：typer
 - **包管理**：UV

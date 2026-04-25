@@ -1,6 +1,6 @@
 """CSMAR MCP client adapter.
 
-Launches the ``packages/CSMAR-Data-MCP`` submodule as a stdio subprocess via
+Launches the ``csmar-mcp`` submodule as a stdio subprocess via
 ``langchain-mcp-adapters`` and exposes its tools as LangChain ``BaseTool``
 instances for upstream ``nodes/`` and ``subgraphs/``.
 

@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [tool.uv.workspace]
-members = ["packages/CSMAR-Data-MCP", "packages/Stata-Executor-MCP"]
+members = ["csmar-mcp", "stata-executor"]
 
 [tool.uv.sources]
 csmar-mcp = { workspace = true }
@@ -54,7 +54,7 @@ packages = ["src/harness_stata"]
 target-version = "py312"
 line-length = 100
 src = ["src", "tests"]
-extend-exclude = ["packages/CSMAR-Data-MCP/csmarapi"]
+extend-exclude = ["csmar-mcp/csmarapi"]
 
 [tool.ruff.lint]
 select = [

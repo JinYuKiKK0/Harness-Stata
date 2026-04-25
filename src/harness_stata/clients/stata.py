@@ -1,6 +1,6 @@
 """Stata executor MCP client adapter.
 
-Launches the ``packages/Stata-Executor-MCP`` submodule as a stdio subprocess via
+Launches the ``stata-executor`` submodule as a stdio subprocess via
 ``langchain-mcp-adapters`` and exposes its tools as LangChain ``BaseTool``
 instances for upstream ``nodes/`` and ``subgraphs/``.
 

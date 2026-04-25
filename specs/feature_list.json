@@ -144,7 +144,7 @@
       "id": "F13",
       "description": "clients/csmar.py 通过 langchain-mcp-adapters 暴露 csmar-mcp 工具集",
       "steps": [
-        "通过 MCP 协议连接 packages/CSMAR-Data-MCP",
+        "通过 MCP 协议连接 csmar-mcp",
         "暴露 get_csmar_tools() contextmanager 管理生命周期",
         "import-linter 校验未直接 import services 层"
       ],
@@ -155,7 +155,7 @@
       "id": "F14",
       "description": "clients/stata.py 通过 langchain-mcp-adapters 暴露 stata-executor-mcp 工具集",
       "steps": [
-        "通过 MCP 协议连接 packages/Stata-Executor-MCP",
+        "通过 MCP 协议连接 stata-executor",
         "暴露 get_stata_tools() contextmanager 管理生命周期",
         "import-linter 校验未直接 import services 层"
       ],
@@ -307,9 +307,9 @@
       "id": "F27",
       "description": "packages 下外部 MCP 改造为独立 git submodule，主项目依赖和门禁切换到新源码路径",
       "steps": [
-        "提交并推送 packages/CSMAR-Data-MCP 与 packages/Stata-Executor-MCP 两个独立仓库的当前源码状态",
+        "提交并推送 csmar-mcp 与 stata-executor 两个独立仓库的当前源码状态",
         "主仓库删除旧 packages/csmar-mcp 与 packages/stata-executor tracked 源码目录",
-        "主仓库添加 .gitmodules，并以 gitlink 跟踪 packages/CSMAR-Data-MCP 与 packages/Stata-Executor-MCP",
+        "主仓库添加 .gitmodules，并以 gitlink 跟踪 csmar-mcp 与 stata-executor",
         "pyproject.toml、scripts/check.py、clients 文档和项目文档全部切换到新 submodule 路径",
         "uv sync --extra dev、scripts/check.py、导入验证与 git submodule status 验证通过"
       ],

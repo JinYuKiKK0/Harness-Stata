@@ -2,15 +2,15 @@
 
 ## 当前焦点
 
-F27 MCP 子模块迁移：移除主仓库内旧 `packages/csmar-mcp` / `packages/stata-executor` 源码，改用 `packages/CSMAR-Data-MCP` 与 `packages/Stata-Executor-MCP` 两个 git submodule；同步修正主项目 uv workspace、MCP 客户端说明、质量门禁路径与项目文档。
+F27 MCP 子模块迁移：移除主仓库内旧 `packages/csmar-mcp` / `packages/stata-executor` 源码，改用 `csmar-mcp` 与 `stata-executor` 两个 git submodule；同步修正主项目 uv workspace、MCP 客户端说明、质量门禁路径与项目文档。
 
 ## 当前上下文
 
 <!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
 - 本次会话 — MCP 子模块迁移：
-  - `packages/CSMAR-Data-MCP` 已提交并通过 SSH 推送 `1035a64`；ruff check、ruff format、pyright 通过。
-  - `packages/Stata-Executor-MCP` 已提交并通过 SSH 推送 `6b63709`；保留既有 ruff/pytest 技术债。
+  - `csmar-mcp` 已提交并通过 SSH 推送 `1035a64`；ruff check、ruff format、pyright 通过。
+  - `stata-executor` 已提交并通过 SSH 推送 `6b63709`；保留既有 ruff/pytest 技术债。
   - 主仓库新增 `.gitmodules`，删除旧 MCP 源码目录，uv workspace 指向两个新 submodule，submodule URL 已切换为 SSH。
   - 主仓库 `uv sync --extra dev` 已确认从新 submodule 安装 `csmar-mcp` 与 `stata-executor`。
   - lint 边界明确：主仓库 `scripts/check.py` 只检查 Harness-Stata，自仓库 lint 由各 MCP 子仓库独立维护。
@@ -31,8 +31,8 @@ F27 MCP 子模块迁移：移除主仓库内旧 `packages/csmar-mcp` / `packages
 - `@tool` 装饰器在 pyright strict 下需 `# pyright: ignore[reportUntypedFunctionDecorator, reportUnknownVariableType, reportUnknownArgumentType]` 压制
 - pandas 在 pyright strict 下大量 reportUnknownMemberType,F20 采用 `cast("Any", ...)` + `# pyright: ignore` 组合
 - ruff RUF001/RUF002/RUF003 已在 pyproject 中 ignore（中文 docstring/注释采用全角标点为项目约定）；但 Field description 仍要避免同形希腊字母 α/β/γ
-- `packages/Stata-Executor-MCP/` 的 ruff/pyright 收口尚未做；临时 ruff 检查暴露 import 排序、相对导入、SIM103 等既有问题
-- `packages/Stata-Executor-MCP/` 临时 pytest 在当前环境触发 pytest capture 临时文件 `FileNotFoundError`，需后续在子仓库单独定位
+- `stata-executor/` 的 ruff/pyright 收口尚未做；临时 ruff 检查暴露 import 排序、相对导入、SIM103 等既有问题
+- `stata-executor/` 临时 pytest 在当前环境触发 pytest capture 临时文件 `FileNotFoundError`，需后续在子仓库单独定位
 - `subgraphs/probe_subgraph.py` 当前 487 行触发 check_file_size warn,下一次实质性扩展前应拆出 `_probe_helpers.py`
 - F20 数据清洗节点已从 pandas REPL 重构为 DuckDB SQL；覆盖率阈值已提到 `Settings.cleaning_coverage_threshold`（不再硬编码）
 - F22 `actual_sign` 由 LLM 从 log 抽取,节点不 parse log;若发现 LLM 误读可改为节点端正则抽取 Stata 回归表格
