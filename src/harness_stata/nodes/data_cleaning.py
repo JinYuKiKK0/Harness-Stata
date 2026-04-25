@@ -23,6 +23,7 @@ from duckdb import DuckDBPyConnection
 from langchain.agents import create_agent  # pyright: ignore[reportUnknownVariableType]
 from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
+from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool, tool  # pyright: ignore[reportUnknownVariableType]
 from pydantic import BaseModel, Field
@@ -370,7 +371,7 @@ async def data_cleaning(state: WorkflowState) -> MergedDataset:
             middleware=[
                 ModelCallLimitMiddleware(run_limit=_MAX_ITERATIONS, exit_behavior="error"),
             ],
-            response_format=_CleaningOutput,
+            response_format=ToolStrategy(_CleaningOutput),
         )
         initial = {
             "messages": [

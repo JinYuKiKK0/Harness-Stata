@@ -19,6 +19,7 @@ from typing import Any
 from langchain.agents import create_agent  # pyright: ignore[reportUnknownVariableType]
 from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
+from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
@@ -129,7 +130,7 @@ async def descriptive_stats(state: WorkflowState) -> DescStatsReport:
             middleware=[
                 ModelCallLimitMiddleware(run_limit=_MAX_ITERATIONS, exit_behavior="error"),
             ],
-            response_format=_DescStatsOutput,
+            response_format=ToolStrategy(_DescStatsOutput),
         )
         initial = {
             "messages": [HumanMessage(content=_build_human_prompt(spec, merged, do_path, log_path))]

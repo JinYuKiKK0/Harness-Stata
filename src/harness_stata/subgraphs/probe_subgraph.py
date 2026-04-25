@@ -20,6 +20,7 @@ from typing import Any, Literal, TypedDict
 
 from langchain.agents import create_agent  # pyright: ignore[reportUnknownVariableType]
 from langchain.agents.middleware import ToolCallLimitMiddleware
+from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
@@ -200,7 +201,7 @@ def build_probe_subgraph(
                     exit_behavior="end",
                 ),
             ],
-            response_format=_VariableProbeFindingModel,
+            response_format=ToolStrategy(_VariableProbeFindingModel),
         )
         result: dict[str, Any] = await agent.ainvoke({"messages": [human]})  # type: ignore[reportUnknownMemberType]
         finding = result.get("structured_response")

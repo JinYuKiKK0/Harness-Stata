@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal, TypedDict, cast
 
 from langchain.agents import create_agent  # pyright: ignore[reportUnknownVariableType]
 from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
+from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field
 
@@ -132,15 +134,35 @@ def _compute_sign_check(plan: ModelPlan, actual_sign: str) -> SignCheck:
 
 
 def _coerce_execution_payload(raw: object) -> dict[str, Any] | None:
-    if isinstance(raw, dict) and "status" in raw:
-        return cast("dict[str, Any]", raw)
+    if isinstance(raw, Mapping):
+        raw_map = cast("Mapping[str, object]", raw)
+        if "status" in raw_map:
+            return cast("dict[str, Any]", dict(raw_map))
+        structured = raw_map.get("structured_content") or raw_map.get("structuredContent")
+        if structured is not None:
+            return _coerce_execution_payload(structured)
     if isinstance(raw, str):
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
             return None
-        if isinstance(parsed, dict) and "status" in parsed:
-            return cast("dict[str, Any]", parsed)
+        return _coerce_execution_payload(parsed)
+    return None
+
+
+def _payload_from_content_blocks(message: ToolMessage) -> dict[str, Any] | None:
+    blocks = cast("Sequence[object]", message.content_blocks)
+    for block in reversed(blocks):
+        payload: dict[str, Any] | None
+        if isinstance(block, str):
+            payload = _coerce_execution_payload(block)
+        elif isinstance(block, Mapping):
+            block_map = cast("Mapping[str, object]", block)
+            payload = _coerce_execution_payload(block_map.get("text"))
+        else:
+            payload = None
+        if payload is not None:
+            return payload
     return None
 
 
@@ -148,26 +170,14 @@ def _payload_from_tool_message(message: ToolMessage) -> dict[str, Any] | None:
     artifact_payload = _coerce_execution_payload(message.artifact)
     if artifact_payload is not None:
         return artifact_payload
-    content = cast("object", message.content)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-    if isinstance(content, str):
-        return _coerce_execution_payload(content)
-    if isinstance(content, list):  # pyright: ignore[reportUnnecessaryIsInstance]
-        blocks = cast("list[object]", content)
-        for block in reversed(blocks):
-            if isinstance(block, str):
-                payload = _coerce_execution_payload(block)
-            elif isinstance(block, dict):
-                payload = _coerce_execution_payload(cast("dict[str, object]", block).get("text"))
-            else:
-                payload = None
-            if payload is not None:
-                return payload
+    block_payload = _payload_from_content_blocks(message)
+    if block_payload is not None:
+        return block_payload
     return None
 
 
 def _is_run_do_message(message: ToolMessage) -> bool:
-    kwargs = cast("dict[str, object]", message.additional_kwargs)  # pyright: ignore[reportUnknownMemberType]
-    name = message.name or kwargs.get("name")
+    name = message.name
     return isinstance(name, str) and name.endswith("run_do")
 
 
@@ -249,7 +259,7 @@ async def regression(state: WorkflowState) -> RegressionOutput:
             middleware=[
                 ModelCallLimitMiddleware(run_limit=_MAX_ITERATIONS, exit_behavior="error"),
             ],
-            response_format=_RegressionOutput,
+            response_format=ToolStrategy(_RegressionOutput),
         )
         initial = {
             "messages": [
