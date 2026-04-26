@@ -20,16 +20,11 @@ from typing import Any, cast
 import duckdb
 import pandas as pd
 from duckdb import DuckDBPyConnection
-from langchain.agents import create_agent  # pyright: ignore[reportUnknownVariableType]
-from langchain.agents.middleware import ModelCallLimitMiddleware
-from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
-from langchain.agents.structured_output import ToolStrategy
-from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool, tool  # pyright: ignore[reportUnknownVariableType]
 from pydantic import BaseModel, Field
 
-from harness_stata.clients.llm import get_chat_model
 from harness_stata.config import get_settings
+from harness_stata.nodes._agent_runner import run_structured_agent
 from harness_stata.nodes._writes import awrites_to
 from harness_stata.prompts import load_prompt
 from harness_stata.state import (
@@ -364,34 +359,14 @@ async def data_cleaning(state: WorkflowState) -> MergedDataset:
         view_names = _register_sources(conn, files)
         source_blocks = _probe_sources_for_prompt(conn, files, view_names)
         sql_tool = _make_sql_tool(conn)
-        agent = create_agent(
-            model=get_chat_model(),
-            tools=[sql_tool],  # type: ignore[list-item]
+        payload, _ = await run_structured_agent(
+            tools=[sql_tool],
             system_prompt=load_prompt("data_cleaning"),
-            middleware=[
-                ModelCallLimitMiddleware(run_limit=_MAX_ITERATIONS, exit_behavior="error"),
-            ],
-            response_format=ToolStrategy(_CleaningOutput),
+            output_schema=_CleaningOutput,
+            human_message=_build_human_prompt(spec, source_blocks, output_path),
+            max_iterations=_MAX_ITERATIONS,
+            node_name="data_cleaning",
         )
-        initial = {
-            "messages": [
-                HumanMessage(content=_build_human_prompt(spec, source_blocks, output_path))
-            ]
-        }
-        try:
-            result: dict[str, Any] = await agent.ainvoke(initial)  # type: ignore[reportUnknownMemberType]
-        except ModelCallLimitExceededError as exc:
-            raise RuntimeError(
-                f"data_cleaning: ReAct reached max_iterations ({_MAX_ITERATIONS})"
-                f" without a terminal response"
-            ) from exc
-
-        payload = result.get("structured_response")
-        if not isinstance(payload, _CleaningOutput):
-            raise RuntimeError(
-                f"data_cleaning: agent did not produce a structured response"
-                f" (got {type(payload).__name__})"
-            )
         final_view = payload.final_view
         primary_key = list(payload.primary_key)
         if not final_view:

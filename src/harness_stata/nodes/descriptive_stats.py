@@ -14,17 +14,11 @@ write ``workflow_status`` -- the graph continues toward the regression node.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
-from langchain.agents import create_agent  # pyright: ignore[reportUnknownVariableType]
-from langchain.agents.middleware import ModelCallLimitMiddleware
-from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
-from langchain.agents.structured_output import ToolStrategy
-from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
-from harness_stata.clients.llm import get_chat_model
 from harness_stata.clients.stata import get_stata_tools
+from harness_stata.nodes._agent_runner import run_structured_agent
 from harness_stata.nodes._writes import awrites_to
 from harness_stata.prompts import load_prompt
 from harness_stata.state import (
@@ -123,32 +117,15 @@ async def descriptive_stats(state: WorkflowState) -> DescStatsReport:
     log_path = session_dir / _LOG_FILENAME
 
     async with get_stata_tools() as tools:
-        agent = create_agent(
-            model=get_chat_model(),
-            tools=tools,  # type: ignore[arg-type]
+        payload, _ = await run_structured_agent(
+            tools=tools,
             system_prompt=load_prompt("descriptive_stats"),
-            middleware=[
-                ModelCallLimitMiddleware(run_limit=_MAX_ITERATIONS, exit_behavior="error"),
-            ],
-            response_format=ToolStrategy(_DescStatsOutput),
+            output_schema=_DescStatsOutput,
+            human_message=_build_human_prompt(spec, merged, do_path, log_path),
+            max_iterations=_MAX_ITERATIONS,
+            node_name="descriptive_stats",
         )
-        initial = {
-            "messages": [HumanMessage(content=_build_human_prompt(spec, merged, do_path, log_path))]
-        }
-        try:
-            result: dict[str, Any] = await agent.ainvoke(initial)  # type: ignore[reportUnknownMemberType]
-        except ModelCallLimitExceededError as exc:
-            raise RuntimeError(
-                f"descriptive_stats: ReAct reached max_iterations ({_MAX_ITERATIONS})"
-                f" without a terminal response"
-            ) from exc
 
-    payload = result.get("structured_response")
-    if not isinstance(payload, _DescStatsOutput):
-        raise RuntimeError(
-            f"descriptive_stats: agent did not produce a structured response"
-            f" (got {type(payload).__name__})"
-        )
     if not payload.do_file_path:
         raise RuntimeError("descriptive_stats: structured_response.do_file_path is empty")
     if not payload.log_file_path:

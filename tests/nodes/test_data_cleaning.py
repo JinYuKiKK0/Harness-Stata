@@ -63,7 +63,7 @@ def _patch_agent(
         return fake
 
     mocker.patch(
-        "harness_stata.nodes.data_cleaning.create_agent",
+        "harness_stata.nodes._agent_runner.create_agent",
         side_effect=_fake_create,
     )
 

@@ -21,15 +21,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal, TypedDict, cast
 
-from langchain.agents import create_agent  # pyright: ignore[reportUnknownVariableType]
-from langchain.agents.middleware import ModelCallLimitMiddleware
-from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
-from langchain.agents.structured_output import ToolStrategy
-from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import BaseMessage, ToolMessage
 from pydantic import BaseModel, Field
 
-from harness_stata.clients.llm import get_chat_model
 from harness_stata.clients.stata import get_stata_tools
+from harness_stata.nodes._agent_runner import run_structured_agent
 from harness_stata.prompts import load_prompt
 from harness_stata.state import (
     EmpiricalSpec,
@@ -252,34 +248,15 @@ async def regression(state: WorkflowState) -> RegressionOutput:
     log_path = session_dir / _LOG_FILENAME
 
     async with get_stata_tools() as tools:
-        agent = create_agent(
-            model=get_chat_model(),
-            tools=tools,  # type: ignore[arg-type]
+        payload, messages = await run_structured_agent(
+            tools=tools,
             system_prompt=load_prompt("regression"),
-            middleware=[
-                ModelCallLimitMiddleware(run_limit=_MAX_ITERATIONS, exit_behavior="error"),
-            ],
-            response_format=ToolStrategy(_RegressionOutput),
+            output_schema=_RegressionOutput,
+            human_message=_build_human_prompt(spec, plan, merged, do_path, log_path),
+            max_iterations=_MAX_ITERATIONS,
+            node_name="regression",
         )
-        initial = {
-            "messages": [
-                HumanMessage(content=_build_human_prompt(spec, plan, merged, do_path, log_path))
-            ]
-        }
-        try:
-            result: dict[str, Any] = await agent.ainvoke(initial)  # type: ignore[reportUnknownMemberType]
-        except ModelCallLimitExceededError as exc:
-            raise RuntimeError(
-                f"regression: ReAct reached max_iterations ({_MAX_ITERATIONS})"
-                f" without a terminal response"
-            ) from exc
 
-    payload = result.get("structured_response")
-    if not isinstance(payload, _RegressionOutput):
-        raise RuntimeError(
-            f"regression: agent did not produce a structured response"
-            f" (got {type(payload).__name__})"
-        )
     if not payload.do_file_path:
         raise RuntimeError("regression: structured_response.do_file_path is empty")
     if not payload.log_file_path:
@@ -290,8 +267,6 @@ async def regression(state: WorkflowState) -> RegressionOutput:
     _assert_file_exists(payload.do_file_path, "do_file_path")
     _assert_file_exists(payload.log_file_path, "log_file_path")
 
-    messages_raw: object = result.get("messages")
-    messages = cast("list[BaseMessage]", messages_raw) if isinstance(messages_raw, list) else []
     execution = _extract_successful_run_do(messages)
     log_text = Path(payload.log_file_path).read_text(encoding="utf-8", errors="replace")
     result_text_raw = execution.get("result_text")

@@ -2,18 +2,17 @@
 
 ## 当前焦点
 
-Review findings 收口：修复下载 filters 契约、回归结果确定性解析、Soft 替代回写 ModelPlan，并同步清理 InMemorySaver 文档漂移与 LLM 依赖漂移。
+技术债清理（审查报告 C1 / H1 / H4）：依赖版本对齐 + create_agent 装配工厂化。
 
 ## 当前上下文
 
 <!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
-- 本次会话 — Review findings 修复：
-  - `DownloadTask.filters` 已收敛为 `start_date` / `end_date` 必填、`condition` 可选；探针子图按 `EmpiricalSpec` 时间范围确定性生成日期。
-  - `regression` 不再信任 LLM 自报 `actual_sign`，改为校验 `run_do` 成功并从 Stata log / result_text 解析核心系数方向。
-  - Soft 替代成功后同步回写 `EmpiricalSpec` 与 `ModelPlan`；探针 helper 已拆到 `_probe_helpers.py`，避免 file-size hard gate。
-  - 主仓库依赖移除 `langchain-community` / `dashscope`，文档统一为 `ChatOpenAI` 调用 OpenAI 兼容接口；InMemorySaver 保持本地 CLI 当前策略。
-  - `uv sync --extra dev`、漂移扫描与 `uv run scripts/check.py` 已通过。
+- 本次会话 — 审查报告 C1 / H1 / H4 修复：
+  - C1：`pandas` 在主仓与 csmar-mcp 对齐为 `>=2.2.0,<3`，消除 UV workspace 跨子模块的版本漂移。
+  - H1：`langchain-mcp-adapters` 加版本上界 `>=0.2.2,<0.3`，防止 0.3+ 破坏性升级。
+  - H4：抽出 `nodes/_agent_runner.py::run_structured_agent` 工厂，把 `data_cleaning` / `descriptive_stats` / `regression` 三个节点内联的 create_agent + ainvoke + payload 校验样板下沉为单一调用点。三个测试文件的 `create_agent` patch 路径同步切换到 `_agent_runner` 模块。
+  - `uv run scripts/check.py` 6/6 通过。
 
 ## 下一步
 

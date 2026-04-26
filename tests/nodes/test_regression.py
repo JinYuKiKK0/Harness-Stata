@@ -50,7 +50,7 @@ def _patch_env(
             }
         )
     mocker.patch(
-        "harness_stata.nodes.regression.create_agent",
+        "harness_stata.nodes._agent_runner.create_agent",
         return_value=fake_agent,
     )
     mocker.patch(

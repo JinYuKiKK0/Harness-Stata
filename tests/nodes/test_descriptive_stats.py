@@ -38,7 +38,7 @@ def _patch_env(
         fake_agent.ainvoke = AsyncMock(
             return_value={"messages": [], "structured_response": payload}
         )
-    mocker.patch("harness_stata.nodes.descriptive_stats.create_agent", return_value=fake_agent)
+    mocker.patch("harness_stata.nodes._agent_runner.create_agent", return_value=fake_agent)
     mocker.patch(
         "harness_stata.nodes.descriptive_stats.get_stata_tools",
         side_effect=lambda: _empty_stata_tools(),
