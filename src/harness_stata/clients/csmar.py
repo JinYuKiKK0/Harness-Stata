@@ -51,7 +51,8 @@ async def get_csmar_tools() -> AsyncGenerator[list[BaseTool]]:
                 "transport": "stdio",
             }
         },
+        tool_interceptors=[append_structured_content],
     )
     async with client.session("csmar") as session:
-        tools = await load_mcp_tools(session, tool_interceptors=[append_structured_content])
+        tools = await load_mcp_tools(session)
         yield tools

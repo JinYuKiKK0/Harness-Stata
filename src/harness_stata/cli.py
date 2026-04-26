@@ -20,6 +20,7 @@ from typing import Any, cast
 import typer
 from langgraph.types import Command
 
+from harness_stata.config import apply_langsmith_env
 from harness_stata.graph import build_graph
 from harness_stata.state import UserRequest, WorkflowState
 
@@ -200,6 +201,8 @@ def run(
         "data_frequency": data_frequency.value,  # pyright: ignore[reportAssignmentType]
     }
     tid = thread_id or str(uuid.uuid4())
+    if apply_langsmith_env():
+        typer.echo("[harness-stata] LangSmith tracing enabled")
     typer.echo(f"[harness-stata] thread_id={tid}")
 
     final_state = asyncio.run(_drive_graph({"user_request": request}, tid))

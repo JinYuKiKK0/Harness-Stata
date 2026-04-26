@@ -8,6 +8,7 @@ drift between machines.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,6 +31,10 @@ class Settings:
     downloads_root: Path
     per_variable_max_calls: int
     cleaning_coverage_threshold: float
+    langsmith_tracing: bool
+    langsmith_api_key: str | None
+    langsmith_project: str
+    langsmith_endpoint: str | None
 
 
 def _load_env() -> dict[str, str]:
@@ -100,6 +105,22 @@ def get_settings() -> Settings:
         msg = f"HARNESS_CLEANING_COVERAGE_THRESHOLD={cleaning_coverage_threshold} 必须落在 (0, 1] 区间内。"
         raise RuntimeError(msg)
 
+    langsmith_tracing = env.get("LANGSMITH_TRACING", "").strip().lower() in {
+        "true",
+        "1",
+        "yes",
+        "on",
+    }
+    langsmith_api_key = env.get("LANGSMITH_API_KEY") or None
+    if langsmith_tracing and not langsmith_api_key:
+        msg = (
+            "LANGSMITH_TRACING=true 但 LANGSMITH_API_KEY 未配置。"
+            " 请在项目根 .env 中设置 LangSmith API Key,或将 LANGSMITH_TRACING 改为 false。"
+        )
+        raise RuntimeError(msg)
+    langsmith_project = env.get("LANGSMITH_PROJECT", "harness-stata")
+    langsmith_endpoint = env.get("LANGSMITH_ENDPOINT") or None
+
     return Settings(
         dashscope_api_key=api_key,
         llm_model_name=env.get("LLM_MODEL", "qwen-plus"),
@@ -112,4 +133,30 @@ def get_settings() -> Settings:
         downloads_root=downloads_root,
         per_variable_max_calls=per_variable_max_calls,
         cleaning_coverage_threshold=cleaning_coverage_threshold,
+        langsmith_tracing=langsmith_tracing,
+        langsmith_api_key=langsmith_api_key,
+        langsmith_project=langsmith_project,
+        langsmith_endpoint=langsmith_endpoint,
     )
+
+
+def apply_langsmith_env() -> bool:
+    """Export LangSmith config from .env to ``os.environ`` so the SDK auto-wires tracing.
+
+    LangSmith SDK reads its API key/project/endpoint from ``os.environ``; the project
+    rule is "configuration comes from .env only". This function bridges the two by
+    pushing the .env-resolved values into ``os.environ`` at startup, keeping .env as
+    the single source of truth (no fallback to system env). Opt-in via
+    ``LANGSMITH_TRACING=true`` in .env. Returns True if tracing was enabled.
+    """
+    s = get_settings()
+    api_key = s.langsmith_api_key
+    if not s.langsmith_tracing or api_key is None:
+        return False
+    os.environ["LANGSMITH_TRACING"] = "true"
+    os.environ["LANGSMITH_API_KEY"] = api_key
+    os.environ["LANGSMITH_PROJECT"] = s.langsmith_project
+    endpoint = s.langsmith_endpoint
+    if endpoint:
+        os.environ["LANGSMITH_ENDPOINT"] = endpoint
+    return True

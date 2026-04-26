@@ -49,7 +49,8 @@ async def get_stata_tools() -> AsyncGenerator[list[BaseTool]]:
                 },
             }
         },
+        tool_interceptors=[append_structured_content],
     )
     async with client.session("stata") as session:
-        tools = await load_mcp_tools(session, tool_interceptors=[append_structured_content])
+        tools = await load_mcp_tools(session)
         yield tools
