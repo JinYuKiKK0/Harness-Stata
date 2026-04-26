@@ -62,7 +62,7 @@ def requirement_analysis(state: WorkflowState) -> EmpiricalSpec:
     user_message = _format_user_message(user_req)
 
     model = get_chat_model()
-    structured = model.with_structured_output(_EmpiricalSpecModel)
+    structured = model.with_structured_output(_EmpiricalSpecModel, method="function_calling")
 
     result = structured.invoke(
         [

@@ -71,7 +71,7 @@ def model_construction(state: WorkflowState) -> ModelPlan:
     user_message = _format_empirical_spec(spec)
 
     model = get_chat_model()
-    structured = model.with_structured_output(_ModelPlanModel)
+    structured = model.with_structured_output(_ModelPlanModel, method="function_calling")
 
     result = structured.invoke(
         [
