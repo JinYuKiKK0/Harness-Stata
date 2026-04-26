@@ -48,7 +48,6 @@ harness-stata/
 │   ├── prompts/                  # Markdown 格式 system prompt
 │   │   └── __init__.py           # 提供 load_prompt(name)
 │   └── clients/                  # 外部依赖统一入口（contextmanager 管理生命周期）
-│       ├── _mcp_interceptors.py  # MCP 拦截器
 │       ├── csmar.py              # CSMAR-Data-MCP 客户端适配
 │       ├── stata.py              # Stata-Executor-MCP 客户端适配
 │       └── llm.py                # LLM 客户端封装

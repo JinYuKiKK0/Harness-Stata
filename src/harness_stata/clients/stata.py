@@ -19,7 +19,6 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 
-from harness_stata.clients._mcp_interceptors import append_structured_content
 from harness_stata.config import get_settings
 
 
@@ -49,7 +48,6 @@ async def get_stata_tools() -> AsyncGenerator[list[BaseTool]]:
                 },
             }
         },
-        tool_interceptors=[append_structured_content],
     )
     async with client.session("stata") as session:
         tools = await load_mcp_tools(session)
