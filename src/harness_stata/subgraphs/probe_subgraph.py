@@ -1,16 +1,37 @@
 """Probe subgraph factory.
 
-Three-node topology: ``variable_dispatcher -> variable_react -> result_handler``
-with ``per_variable_max_calls`` budget isolated per variable. Soft+not_found
-appends a substitute ``VariableDefinition`` to the queue so the next dispatcher
-round runs with an independent budget; hard+not_found flips overall_status to
-``hard_failure`` and routes straight to END.
+Five-node, two-phase topology::
 
-The inner ReAct loop is built with :func:`langchain.agents.create_agent`, which
-produces the :class:`_VariableProbeFindingModel` finding directly via its
-``response_format`` — replacing the previous two-phase "ReAct trace + structured
-extractor" pipeline that accounted for the :class:`AssertionError` documented in
-``docs/bug.md``.
+    variable_dispatcher -> variable_react -> field_existence_handler
+                                                     │
+                                ┌── discovery_queue 非空 ─┤
+                                │                        │
+                                ▼                        │
+                       (back to dispatcher)              │
+                                                         │
+                                discovery_queue 空 + validation_queue 非空
+                                                         │
+                                                         ▼
+                                              coverage_validator
+                                                         │
+                                                         ▼
+                                          coverage_validation_handler
+                                                         │
+                                  ┌── 触发 substitute 重新入 discovery_queue ─┤
+                                  │                                          │
+                                  ▼                                          │
+                         (back to dispatcher)                                │
+                                                                             │
+                                  hard_failure / 全部完成 → END
+
+阶段一(字段发现): Agent 读 schema 判断字段是否存在,只确认 (database, table,
+field, key_fields) 与可选的 filters.condition;不再让 Agent 跑 ``probe_query``。
+
+阶段二(覆盖率验证): 对 ``validation_queue`` 里每条候选,代码批量调用
+``csmar_probe_query`` 取 ``can_materialize`` / ``invalid_columns``。通过则写
+``probe_report`` + ``download_manifest``;失败则视作 ``not_found`` 走与字段未找
+到完全一致的 hard/soft 路由(hard → ``failed_hard_contract`` 终止;soft 主任务
+→ 触发 substitute 候选重入 discovery_queue;substitute 任务 → 链终止)。
 """
 
 from __future__ import annotations
@@ -25,80 +46,35 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from pydantic import BaseModel, Field
 
 from harness_stata.clients.llm import get_chat_model
 from harness_stata.state import (
     DownloadManifest,
-    DownloadTask,
     EmpiricalSpec,
     ModelPlan,
     ProbeReport,
-    SubstitutionTrace,
     VariableDefinition,
-    VariableProbeResult,
-    VariableSource,
     WorkflowStatus,
 )
 from harness_stata.subgraphs._probe_helpers import (
-    build_download_filters,
+    OUTPUT_SPEC,
+    CoverageEntry,
+    CoverageOutcome,
+    PendingValidation,
+    SubstituteMeta,
+    VariableProbeFindingModel,
+    build_found_result,
+    build_not_found_result,
+    build_probe_query_payload,
+    build_substituted_result,
+    ensure_manifest,
+    ensure_report,
+    maybe_build_substitute,
+    merge_into_manifest,
     replace_variable_in_model_plan,
     replace_variable_in_spec,
+    run_probe_coverage,
 )
-
-# ---------------------------------------------------------------------------
-# Structured-output schema (used as create_agent response_format)
-# ---------------------------------------------------------------------------
-
-_OUTPUT_SPEC = """你的探测结论必须直接按给定 schema 的字段填写,不要输出自然语言总结。字段规则:
-
-- status="found" 要求 database / table / field 三字段非空;key_fields 填写主键/时间键列名。
-- status="not_found" 时 source/key_fields/filters 保持 null 或空。
-- soft 变量若没找到,但你在探测中发现了合理的替代变量,填写
-  candidate_substitute_name / candidate_substitute_description / candidate_substitute_reason;
-  否则三者留空。hard 变量不要填 substitute 字段。
-- filters 不要写时间范围;运行时会从 EmpiricalSpec.time_range_start/end
-  自动生成 start_date/end_date。若 CSMAR 需要额外样本筛选,只允许填写
-  {"condition": "..."}。
-- 不要编造探测未覆盖的信息;不确定就留 null。
-"""
-
-
-class _VariableProbeFindingModel(BaseModel):
-    """LLM-facing structured-output schema for one variable's probe finding."""
-
-    status: Literal["found", "not_found"] = Field(
-        description="found if the agent located a usable data source, otherwise not_found"
-    )
-    database: str | None = Field(default=None, description="Source database name (found only)")
-    table: str | None = Field(default=None, description="Source table name (found only)")
-    field: str | None = Field(default=None, description="Variable column name (found only)")
-    record_count: int | None = Field(
-        default=None, description="Record count if reported by the agent"
-    )
-    key_fields: list[str] | None = Field(
-        default=None, description="Primary/time key columns for the source table"
-    )
-    filters: dict[str, str] | None = Field(
-        default=None, description="Confirmed time/sample filters keyed by column"
-    )
-    candidate_substitute_name: str | None = Field(
-        default=None, description="Soft+not_found only: candidate substitute variable name"
-    )
-    candidate_substitute_description: str | None = Field(
-        default=None, description="Soft+not_found only: candidate substitute description"
-    )
-    candidate_substitute_reason: str | None = Field(
-        default=None, description="Soft+not_found only: why this substitute fits"
-    )
-
-
-class _SubstituteMeta(TypedDict):
-    """Bookkeeping for a substitute task enqueued for soft+not_found."""
-
-    original_name: str
-    reason: str
-
 
 # ---------------------------------------------------------------------------
 # Subgraph state
@@ -108,13 +84,14 @@ class _SubstituteMeta(TypedDict):
 class ProbeState(TypedDict, total=False):
     """Internal state of the probe subgraph.
 
-    Fields shared with the parent WorkflowState (read-in / write-back):
+    Slices shared with the parent ``WorkflowState`` (read-in / write-back):
     ``empirical_spec``, ``model_plan``, ``probe_report``, ``download_manifest``,
     ``workflow_status``.
 
-    Fields private to the subgraph (do not leak to the parent):
-    ``variable_queue``, ``current_variable``, ``messages``, ``queue_initialized``,
-    ``substitute_meta``, ``available_databases``, ``variable_finding``.
+    Slices private to this subgraph (do not leak to the parent graph):
+    ``discovery_queue`` / ``validation_queue`` / ``coverage_outcomes``,
+    ``current_variable`` / ``messages`` / ``queue_initialized`` /
+    ``substitute_meta`` / ``available_databases`` / ``variable_finding``.
     """
 
     empirical_spec: EmpiricalSpec
@@ -122,13 +99,15 @@ class ProbeState(TypedDict, total=False):
     probe_report: ProbeReport
     download_manifest: DownloadManifest
     workflow_status: WorkflowStatus
-    variable_queue: list[VariableDefinition]
+    discovery_queue: list[VariableDefinition]
+    validation_queue: list[PendingValidation]
+    coverage_outcomes: list[CoverageEntry]
     current_variable: VariableDefinition | None
     messages: list[BaseMessage]
     queue_initialized: bool
-    substitute_meta: dict[str, _SubstituteMeta]
+    substitute_meta: dict[str, SubstituteMeta]
     available_databases: str
-    variable_finding: _VariableProbeFindingModel | None
+    variable_finding: VariableProbeFindingModel | None
 
 
 # ---------------------------------------------------------------------------
@@ -138,13 +117,16 @@ class ProbeState(TypedDict, total=False):
 
 def build_probe_subgraph(
     tools: Sequence[BaseTool],
+    probe_tool: BaseTool,
     prompt: str,
     per_variable_max_calls: int,
 ) -> CompiledStateGraph[ProbeState, ProbeState, ProbeState, ProbeState]:
-    """Build a compiled probe subgraph bound to ``tools`` and ``prompt``.
+    """Build a compiled probe subgraph wired to ``tools`` (Agent) + ``probe_tool``.
 
-    ``per_variable_max_calls`` caps the number of tool calls the inner agent may
-    make for a single variable (enforced by :class:`ToolCallLimitMiddleware`).
+    ``tools`` 是子图 Agent 在字段发现阶段可用的 LangChain 工具(白名单由调用方
+    在 ``data_probe`` 节点决定)。``probe_tool`` 是 ``csmar_probe_query`` 工具,
+    专供覆盖率验证阶段调用,**不会**绑定给 Agent。``per_variable_max_calls``
+    限制 Agent 一轮内的工具调用次数(:class:`ToolCallLimitMiddleware`)。
     """
     if not tools:
         raise ValueError("tools must not be empty")
@@ -152,12 +134,12 @@ def build_probe_subgraph(
         raise ValueError("per_variable_max_calls must be >= 1")
 
     bound_tools: list[BaseTool] = list(tools)
-    system_prompt = f"{prompt}\n\n---\n\n{_OUTPUT_SPEC}"
+    system_prompt = f"{prompt}\n\n---\n\n{OUTPUT_SPEC}"
 
     def _variable_dispatcher(state: ProbeState) -> dict[str, Any]:
-        """Pop the next variable off the queue and reset per-variable state."""
+        """Pop the next variable off the discovery queue and reset per-variable state."""
         if state.get("queue_initialized"):
-            queue = list(state.get("variable_queue") or [])
+            queue = list(state.get("discovery_queue") or [])
         else:
             spec = state["empirical_spec"]  # type: ignore[reportTypedDictNotRequiredAccess]
             queue = list(spec["variables"])
@@ -165,12 +147,12 @@ def build_probe_subgraph(
         updates: dict[str, Any] = {"queue_initialized": True}
         if queue:
             updates["current_variable"] = queue[0]
-            updates["variable_queue"] = queue[1:]
+            updates["discovery_queue"] = queue[1:]
             updates["messages"] = []
             updates["variable_finding"] = None
         else:
             updates["current_variable"] = None
-            updates["variable_queue"] = []
+            updates["discovery_queue"] = []
         return updates
 
     async def _variable_react(state: ProbeState) -> dict[str, Any]:
@@ -201,240 +183,287 @@ def build_probe_subgraph(
                     exit_behavior="end",
                 ),
             ],
-            response_format=ToolStrategy(_VariableProbeFindingModel),
+            response_format=ToolStrategy(VariableProbeFindingModel),
         )
         result: dict[str, Any] = await agent.ainvoke({"messages": [human]})  # type: ignore[reportUnknownMemberType]
         finding = result.get("structured_response")
         messages = result.get("messages", [])
         return {"messages": messages, "variable_finding": finding}
 
-    def _result_handler(state: ProbeState) -> dict[str, Any]:
-        """Interpret the finding; route Hard/Soft and update report/manifest."""
-        report = _ensure_report(state.get("probe_report"))
-        manifest = _ensure_manifest(state.get("download_manifest"))
-        spec = state.get("empirical_spec")
+    def _field_existence_handler(state: ProbeState) -> dict[str, Any]:
+        """Decide per-variable: push to validation_queue / hard fail / substitute / not_found.
+
+        阶段一只判断字段是否存在,**不写 manifest**——manifest 推迟到覆盖率验证
+        通过后由 ``_coverage_validation_handler`` 统一构造,避免回滚成本。
+        """
+        report = ensure_report(state.get("probe_report"))
+        manifest = ensure_manifest(state.get("download_manifest"))
         sub_meta = dict(state.get("substitute_meta") or {})
-        queue = list(state.get("variable_queue") or [])
+        discovery_queue = list(state.get("discovery_queue") or [])
+        validation_queue = list(state.get("validation_queue") or [])
 
         current = state.get("current_variable")
         if current is None:
+            # 空变量集兜底:保证下游消费者拿到形状正确的 probe_report / download_manifest。
             return {"probe_report": report, "download_manifest": manifest}
 
         finding = state.get("variable_finding")
         if finding is None:
-            finding = _VariableProbeFindingModel(status="not_found")
+            finding = VariableProbeFindingModel(status="not_found")
 
         is_substitute_task = current["name"] in sub_meta
 
         if finding.status == "found":
-            if is_substitute_task:
-                meta = sub_meta.pop(current["name"])
-                report["variable_results"].append(_build_substituted_result(meta, current, finding))
-                if spec is not None:
-                    spec = replace_variable_in_spec(spec, meta["original_name"], current)
-            else:
-                report["variable_results"].append(_build_found_result(current, finding))
-            if spec is None:
-                raise RuntimeError("probe_subgraph: empirical_spec is missing")
-            _merge_into_manifest(manifest, current, finding, spec)
-        elif current["contract_type"] == "hard":
-            report["variable_results"].append(_build_not_found_result(current["name"]))
+            validation_queue.append(
+                PendingValidation(
+                    variable=current,
+                    finding=finding,
+                    is_substitute_task=is_substitute_task,
+                )
+            )
+            return {
+                "probe_report": report,
+                "download_manifest": manifest,
+                "discovery_queue": discovery_queue,
+                "validation_queue": validation_queue,
+                "substitute_meta": sub_meta,
+            }
+
+        # 字段未找到 — 与原状态机分支保持一致
+        if current["contract_type"] == "hard":
+            report["variable_results"].append(build_not_found_result(current["name"]))
             report["overall_status"] = "hard_failure"
             report["failure_reason"] = (
                 f"Hard contract variable '{current['name']}' not found in CSMAR"
             )
-            updates: dict[str, Any] = {
+            return {
                 "probe_report": report,
                 "download_manifest": manifest,
                 "workflow_status": "failed_hard_contract",
                 "substitute_meta": sub_meta,
-                "variable_queue": queue,
+                "discovery_queue": discovery_queue,
+                "validation_queue": validation_queue,
             }
-            if spec is not None:
-                updates["empirical_spec"] = spec
-            return updates
-        elif is_substitute_task:
+
+        if is_substitute_task:
             meta = sub_meta.pop(current["name"])
-            report["variable_results"].append(_build_not_found_result(meta["original_name"]))
+            report["variable_results"].append(build_not_found_result(meta["original_name"]))
         else:
-            cand = _maybe_build_substitute(finding, current)
+            cand = maybe_build_substitute(finding, current)
             if cand is not None:
-                queue.append(cand)
-                sub_meta[cand["name"]] = _SubstituteMeta(
+                discovery_queue.append(cand)
+                sub_meta[cand["name"]] = SubstituteMeta(
                     original_name=current["name"],
                     reason=finding.candidate_substitute_reason or "",
                 )
             else:
-                report["variable_results"].append(_build_not_found_result(current["name"]))
+                report["variable_results"].append(build_not_found_result(current["name"]))
 
-        if not queue:
+        return {
+            "probe_report": report,
+            "download_manifest": manifest,
+            "discovery_queue": discovery_queue,
+            "validation_queue": validation_queue,
+            "substitute_meta": sub_meta,
+        }
+
+    async def _coverage_validator(state: ProbeState) -> dict[str, Any]:
+        """Batch-invoke csmar_probe_query for every pending field-level finding.
+
+        每条 PendingValidation 独立解码为 :class:`CoverageOutcome`;调用失败也只是
+        outcome 标记 ``can_materialize=False``,不抛异常。本节点本身始终成功,
+        路由由 ``_coverage_validation_handler`` 决定。
+        """
+        validation_queue = list(state.get("validation_queue") or [])
+        if not validation_queue:
+            return {"coverage_outcomes": []}
+
+        spec = state.get("empirical_spec")
+        if spec is None:
+            raise RuntimeError("probe_subgraph: empirical_spec is missing during coverage check")
+
+        outcomes: list[CoverageEntry] = []
+        for pending in validation_queue:
+            payload = build_probe_query_payload(spec, pending["finding"])
+            ctx = (
+                f"coverage check for variable '{pending['variable']['name']}'"
+                f" on table {pending['finding'].table!r}"
+            )
+            outcome = await run_probe_coverage(probe_tool, payload, ctx)
+            outcomes.append(CoverageEntry(pending=pending, outcome=outcome))
+        return {"coverage_outcomes": outcomes}
+
+    def _coverage_validation_handler(state: ProbeState) -> dict[str, Any]:
+        """Process coverage outcomes: write report/manifest on pass, route fail as not_found."""
+        report = ensure_report(state.get("probe_report"))
+        manifest = ensure_manifest(state.get("download_manifest"))
+        spec = state.get("empirical_spec")
+        plan = state.get("model_plan")
+        sub_meta = dict(state.get("substitute_meta") or {})
+        discovery_queue = list(state.get("discovery_queue") or [])
+        outcomes = list(state.get("coverage_outcomes") or [])
+
+        for entry in outcomes:
+            pending = entry["pending"]
+            outcome = entry["outcome"]
+            current = pending["variable"]
+            finding = pending["finding"]
+            is_substitute_task = pending["is_substitute_task"]
+
+            if outcome["can_materialize"]:
+                spec = _absorb_passing_outcome(
+                    report=report,
+                    manifest=manifest,
+                    spec=spec,
+                    sub_meta=sub_meta,
+                    current=current,
+                    finding=finding,
+                    outcome=outcome,
+                    is_substitute_task=is_substitute_task,
+                )
+                continue
+
+            # Coverage failed → 等同 not_found,沿用 hard/soft 路由
+            if current["contract_type"] == "hard":
+                report["variable_results"].append(build_not_found_result(current["name"]))
+                report["overall_status"] = "hard_failure"
+                report["failure_reason"] = _format_coverage_failure(current["name"], outcome)
+                out: dict[str, Any] = {
+                    "probe_report": report,
+                    "download_manifest": manifest,
+                    "workflow_status": "failed_hard_contract",
+                    "substitute_meta": sub_meta,
+                    "discovery_queue": discovery_queue,
+                    "validation_queue": [],
+                    "coverage_outcomes": [],
+                }
+                if spec is not None:
+                    out["empirical_spec"] = spec
+                return out
+
+            if is_substitute_task:
+                meta = sub_meta.pop(current["name"])
+                report["variable_results"].append(build_not_found_result(meta["original_name"]))
+                continue
+
+            cand = maybe_build_substitute(finding, current)
+            if cand is not None:
+                discovery_queue.append(cand)
+                sub_meta[cand["name"]] = SubstituteMeta(
+                    original_name=current["name"],
+                    reason=finding.candidate_substitute_reason or "",
+                )
+            else:
+                report["variable_results"].append(build_not_found_result(current["name"]))
+
+        if not discovery_queue and report["overall_status"] != "hard_failure":
             report["overall_status"] = "success"
             report["failure_reason"] = None
 
-        out: dict[str, Any] = {
+        out_final: dict[str, Any] = {
             "probe_report": report,
             "download_manifest": manifest,
-            "variable_queue": queue,
+            "discovery_queue": discovery_queue,
+            "validation_queue": [],
+            "coverage_outcomes": [],
             "substitute_meta": sub_meta,
         }
         if spec is not None:
-            out["empirical_spec"] = spec
-        plan = state.get("model_plan")
+            out_final["empirical_spec"] = spec
         if plan is not None:
-            out["model_plan"] = replace_variable_in_model_plan(plan, report["variable_results"])
-        return out
+            out_final["model_plan"] = replace_variable_in_model_plan(
+                plan, report["variable_results"]
+            )
+        return out_final
 
-    def _route_after_handler(
+    def _route_after_field_existence(
+        state: ProbeState,
+    ) -> Literal["variable_dispatcher", "coverage_validator", "__end__"]:
+        report = state.get("probe_report")
+        if report is not None and report.get("overall_status") == "hard_failure":
+            return "__end__"
+        if state.get("discovery_queue"):
+            return "variable_dispatcher"
+        if state.get("validation_queue"):
+            return "coverage_validator"
+        return "__end__"
+
+    def _route_after_coverage_handler(
         state: ProbeState,
     ) -> Literal["variable_dispatcher", "__end__"]:
         report = state.get("probe_report")
         if report is not None and report.get("overall_status") == "hard_failure":
             return "__end__"
-        if state.get("variable_queue"):
+        if state.get("discovery_queue"):
             return "variable_dispatcher"
         return "__end__"
 
     graph: StateGraph[ProbeState, ProbeState, ProbeState, ProbeState] = StateGraph(ProbeState)
     graph.add_node("variable_dispatcher", _variable_dispatcher)  # pyright: ignore[reportUnknownMemberType]
     graph.add_node("variable_react", _variable_react)  # pyright: ignore[reportUnknownMemberType]
-    graph.add_node("result_handler", _result_handler)  # pyright: ignore[reportUnknownMemberType]
+    graph.add_node("field_existence_handler", _field_existence_handler)  # pyright: ignore[reportUnknownMemberType]
+    graph.add_node("coverage_validator", _coverage_validator)  # pyright: ignore[reportUnknownMemberType]
+    graph.add_node("coverage_validation_handler", _coverage_validation_handler)  # pyright: ignore[reportUnknownMemberType]
     graph.add_edge(START, "variable_dispatcher")
     graph.add_edge("variable_dispatcher", "variable_react")
-    graph.add_edge("variable_react", "result_handler")
+    graph.add_edge("variable_react", "field_existence_handler")
     graph.add_conditional_edges(
-        "result_handler",
-        _route_after_handler,
+        "field_existence_handler",
+        _route_after_field_existence,
+        {
+            "variable_dispatcher": "variable_dispatcher",
+            "coverage_validator": "coverage_validator",
+            END: END,
+        },
+    )
+    graph.add_edge("coverage_validator", "coverage_validation_handler")
+    graph.add_conditional_edges(
+        "coverage_validation_handler",
+        _route_after_coverage_handler,
         {"variable_dispatcher": "variable_dispatcher", END: END},
     )
     return graph.compile()  # pyright: ignore[reportUnknownMemberType]
 
 
 # ---------------------------------------------------------------------------
-# Helpers (module-level so they can be unit-tested if needed)
+# Internal helpers (only used by the closure above; module-level for clarity)
 # ---------------------------------------------------------------------------
 
 
-def _ensure_report(existing: ProbeReport | None) -> ProbeReport:
-    if existing is None:
-        return ProbeReport(variable_results=[], overall_status="success", failure_reason=None)
-    return ProbeReport(
-        variable_results=list(existing["variable_results"]),
-        overall_status=existing["overall_status"],
-        failure_reason=existing["failure_reason"],
-    )
-
-
-def _ensure_manifest(existing: DownloadManifest | None) -> DownloadManifest:
-    if existing is None:
-        return DownloadManifest(items=[])
-    items: list[DownloadTask] = [
-        DownloadTask(
-            database=item["database"],
-            table=item["table"],
-            key_fields=list(item["key_fields"]),
-            variable_fields=list(item["variable_fields"]),
-            variable_names=list(item["variable_names"]),
-            filters=dict(item["filters"]),
-        )
-        for item in existing["items"]
-    ]
-    return DownloadManifest(items=items)
-
-
-def _build_found_result(
-    var: VariableDefinition, finding: _VariableProbeFindingModel
-) -> VariableProbeResult:
-    return VariableProbeResult(
-        variable_name=var["name"],
-        status="found",
-        source=VariableSource(
-            database=finding.database or "",
-            table=finding.table or "",
-            field=finding.field or "",
-        ),
-        record_count=finding.record_count,
-        substitution_trace=None,
-    )
-
-
-def _build_substituted_result(
-    meta: _SubstituteMeta, sub_var: VariableDefinition, finding: _VariableProbeFindingModel
-) -> VariableProbeResult:
-    return VariableProbeResult(
-        variable_name=meta["original_name"],
-        status="substituted",
-        source=VariableSource(
-            database=finding.database or "",
-            table=finding.table or "",
-            field=finding.field or "",
-        ),
-        record_count=finding.record_count,
-        substitution_trace=SubstitutionTrace(
-            original=meta["original_name"],
-            reason=meta["reason"],
-            substitute=sub_var["name"],
-            substitute_description=sub_var["description"],
-        ),
-    )
-
-
-def _build_not_found_result(variable_name: str) -> VariableProbeResult:
-    return VariableProbeResult(
-        variable_name=variable_name,
-        status="not_found",
-        source=None,
-        record_count=None,
-        substitution_trace=None,
-    )
-
-
-def _merge_into_manifest(
+def _absorb_passing_outcome(
+    *,
+    report: ProbeReport,
     manifest: DownloadManifest,
+    spec: EmpiricalSpec | None,
+    sub_meta: dict[str, SubstituteMeta],
     current: VariableDefinition,
-    finding: _VariableProbeFindingModel,
-    spec: EmpiricalSpec,
-) -> None:
-    """Append a new DownloadTask or merge into an existing one by (database, table)."""
-    database = finding.database or ""
-    table = finding.table or ""
-    field = finding.field or ""
-    var_name = current["name"]
-    key_fields = list(finding.key_fields or [])
-    filters_typed = build_download_filters(spec, finding.filters)
+    finding: VariableProbeFindingModel,
+    outcome: CoverageOutcome,
+    is_substitute_task: bool,
+) -> EmpiricalSpec | None:
+    """Write a passing outcome into report+manifest; return possibly-rewritten spec."""
+    if spec is None:
+        raise RuntimeError("probe_subgraph: empirical_spec is missing during coverage absorb")
 
-    for item in manifest["items"]:
-        if item["database"] == database and item["table"] == table:
-            if field and field not in item["variable_fields"]:
-                item["variable_fields"].append(field)
-            if var_name and var_name not in item["variable_names"]:
-                item["variable_names"].append(var_name)
-            for kf in key_fields:
-                if kf not in item["key_fields"]:
-                    item["key_fields"].append(kf)
-            for k, v in filters_typed.items():
-                item["filters"][k] = v
-            return
-
-    manifest["items"].append(
-        DownloadTask(
-            database=database,
-            table=table,
-            key_fields=key_fields,
-            variable_fields=[field] if field else [],
-            variable_names=[var_name] if var_name else [],
-            filters=filters_typed,
+    if is_substitute_task:
+        meta = sub_meta.pop(current["name"])
+        report["variable_results"].append(
+            build_substituted_result(meta, current, finding, record_count=outcome["row_count"])
         )
-    )
+        spec = replace_variable_in_spec(spec, meta["original_name"], current)
+    else:
+        report["variable_results"].append(
+            build_found_result(current, finding, record_count=outcome["row_count"])
+        )
+
+    merge_into_manifest(manifest, current, finding, spec)
+    return spec
 
 
-def _maybe_build_substitute(
-    finding: _VariableProbeFindingModel, current: VariableDefinition
-) -> VariableDefinition | None:
-    if not (finding.candidate_substitute_name and finding.candidate_substitute_description):
-        return None
-    return VariableDefinition(
-        name=finding.candidate_substitute_name,
-        description=finding.candidate_substitute_description,
-        contract_type="soft",
-        role=current["role"],
-    )
+def _format_coverage_failure(variable_name: str, outcome: CoverageOutcome) -> str:
+    base = f"Hard contract variable '{variable_name}' coverage check failed: can_materialize=false"
+    if outcome["invalid_columns"]:
+        base = f"{base}, invalid_columns={outcome['invalid_columns']!r}"
+    if outcome["failure_reason"]:
+        base = f"{base}; {outcome['failure_reason']}"
+    return base

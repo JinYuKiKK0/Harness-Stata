@@ -2,16 +2,20 @@
 
 ## 当前焦点
 
-技术债清理（审查报告 C1 / H1 / H4）：依赖版本对齐 + create_agent 装配工厂化。
+数据探针节点(node 3)架构重构:工具暴露收紧 + probe_query 阶段独立。
 
 ## 当前上下文
 
 <!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
-- 本次会话 — 审查报告 C1 / H1 / H4 修复：
-  - C1：`pandas` 在主仓与 csmar-mcp 对齐为 `>=2.2.0,<3`，消除 UV workspace 跨子模块的版本漂移。
-  - H1：`langchain-mcp-adapters` 加版本上界 `>=0.2.2,<0.3`，防止 0.3+ 破坏性升级。
-  - H4：抽出 `nodes/_agent_runner.py::run_structured_agent` 工厂，把 `data_cleaning` / `descriptive_stats` / `regression` 三个节点内联的 create_agent + ainvoke + payload 校验样板下沉为单一调用点。三个测试文件的 `create_agent` patch 路径同步切换到 `_agent_runner` 模块。
+- 本次会话 — data_probe 节点 + probe_subgraph 二阶段化重构:
+  - 工具暴露:Agent 工具集从 7 个收紧为白名单 4 个(`csmar_search_field` / `csmar_list_tables` / `csmar_bulk_schema` / `csmar_get_table_schema`)。`csmar_list_databases` 由节点入口共享注入,`csmar_probe_query` 单独透传给子图作 `probe_tool`,`csmar_materialize_query` / `csmar_refresh_cache` 完全剥离。
+  - 子图拓扑:从 3 节点升级为 5 节点 / 双队列 / 双阶段 — `variable_dispatcher → variable_react → field_existence_handler → coverage_validator → coverage_validation_handler`。Agent 只判定字段存在性,coverage 由 `csmar_probe_query` 批量代码调用决定 `can_materialize` + `invalid_columns`。
+  - 失败语义:覆盖率失败等同 `not_found`,复用现有 hard / soft / substitute 状态机(hard → `failed_hard_contract` 终止;soft 主任务 → 触发 substitute 重新走双阶段;substitute 任务再失败 → 链终止 `not_found`)。
+  - Helper 下沉:所有 ProbeReport / DownloadManifest 构造与变量替换逻辑下沉到 `subgraphs/_probe_helpers.py`(连同新增的 `build_probe_query_payload` / `parse_probe_query_response` / `run_probe_coverage`),`probe_subgraph.py` 只剩拓扑装配。
+  - Prompt 重写:`prompts/data_probe.md` 全面重写,首选 `csmar_search_field`(零远程),空命中回退到 `csmar_list_tables` + `csmar_bulk_schema`;明确告知 Agent 不再估算 record_count(由代码兜底)。
+  - 文档同步:`docs/empirical-analysis-workflow.md` 探针子图段落同步更新为 5 节点 / 双阶段拓扑 + 工具暴露策略。
+  - 测试:`tests/subgraphs/test_probe_subgraph.py` 由 11 case 升级为 16 case(新增 4 个 coverage-stage 路由 case + 3 个响应解码 helper case);`tests/nodes/test_data_probe.py` 新增工具白名单 pinning 断言(共 4 case)。
   - `uv run scripts/check.py` 6/6 通过。
 
 ## 下一步
