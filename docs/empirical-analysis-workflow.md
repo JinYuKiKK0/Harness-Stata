@@ -87,61 +87,57 @@ LangChain agent 内部负责模型循环与工具执行：
 
 #### 数据探针子图（节点 3）
 
-数据探针与通用骨架不同：csmar_mcp 存在每日账号限流，需要**按变量**做调用预算控制，而非全局迭代上限。子图采用「变量级外循环 + 有预算上限的内层 ReAct」结构，并在外循环之外再叠一层「批量覆盖率验证」阶段——把字段定位（让不让 LLM 看 schema）和覆盖率验证（dry-run 拼 columns 看 row_count）显式拆成两个相互独立的事。
+数据探针采用「批量字段发现 + 兜底单变量 ReAct + 批量覆盖率验证 + 累积 substitute 重试」的六节点流水线。核心设计：把字段发现从「按变量串行 ReAct」改为「全局规划 → bulk schema → 桶级验证」的代码主导广度优先流水线，跨变量复用 schema 拉取与上下文，让 `csmar_bulk_schema` 真正发挥作用；只对 hard 变量在桶级验证仍 not_found 时启用单变量 ReAct 兜底（修复 Planning Agent 漏选候选表的场景）。
 
-**工具暴露策略**：节点入口先调一次 `csmar_list_databases` 把已购数据库清单作为共享上下文注入子图（每个变量的 Agent 共用），然后只把字段发现工具集（`csmar_search_field` / `csmar_list_tables` / `csmar_bulk_schema` / `csmar_get_table_schema`）以白名单形式绑定给 Agent。`csmar_probe_query` 单独提取为 `probe_tool` 透传给子图工厂，由覆盖率验证阶段以代码方式批量调用，**不绑定**给 Agent。`csmar_materialize_query` / `csmar_refresh_cache` 完全不在本节点暴露。
+**工具暴露策略**：节点入口先调一次 `csmar_list_databases` 把已购数据库清单作为共享上下文注入子图。Planning Agent 只绑 `csmar_list_tables`（候选 table_code 必须出自 `list_tables` 返回，禁止盲猜）。Verification 阶段不绑任何工具（直接 `with_structured_output()`）。Fallback 单变量 ReAct 绑 `csmar_list_tables` + `csmar_bulk_schema` + `csmar_get_table_schema` 三件套。`csmar_search_field` 不暴露给任何 Agent —— 它是 field_code/table_code 子串匹配，对中文经济变量名几乎永不命中，实测会引发 LLM 反复重试。`csmar_probe_query` 仅由 coverage_validator 代码层调用，`csmar_materialize_query` / `csmar_refresh_cache` 完全不在本节点暴露。
 
 ```
 probe_subgraph START
-  → variable_dispatcher
-  → variable_react (内层 ReAct，受 per_variable_max_calls 约束)
-  → field_existence_handler ──[conditional]──┐
-      │                                       │
-      ├─ found                                 │  压入 validation_queue，
-      │   回到 variable_dispatcher             │  manifest 留到覆盖率验证后再写
-      │                                       │
-      ├─ not_found AND Hard ───────────────────┼──→ END (hard_failure)
-      │                                       │
-      ├─ not_found AND Soft + 给出 substitute ─┤  替代变量塞回 discovery_queue，
-      │   回到 variable_dispatcher             │  下一轮重新走字段发现
-      │                                       │
-      ├─ not_found AND Soft 无 substitute ─────┤  写 not_found result，继续下一个
-      │                                       │
-      └─ discovery_queue 空 ───────────────────┘──→ coverage_validator
-                                              │
-                                              ▼
-  coverage_validator (纯代码批量调 csmar_probe_query)
-      → coverage_validation_handler ──[conditional]──┐
-          │                                          │
-          ├─ can_materialize=true                    │  写 found/substituted result + 合并 manifest
-          │                                          │
-          ├─ can_materialize=false AND Hard ─────────┼──→ END (hard_failure)
-          │                                          │
-          ├─ can_materialize=false AND Soft + 候选 ──┤  替代变量塞回 discovery_queue，
-          │   回到 variable_dispatcher               │  走字段发现 + 覆盖率新一轮
-          │                                          │
-          ├─ can_materialize=false AND substitute ───┤  链终止，记原变量名 not_found
-          │                                          │
-          └─ discovery_queue 与 validation_queue 空 ─┘──→ END (success)
+  → planning_agent (LLM ReAct: 全部待处理变量, 输出 (var → target_db + candidate_tables[]); 节点入口同时承担轮次初始化)
+  → bulk_schema_phase (代码: 候选 table_code 跨变量去重, 一次 csmar_bulk_schema)
+  → verification_phase (LLM 分桶 structured-output: 每 (db, table) 一次, 桶内多变量批判)
+      ──[conditional]──┐
+      │                │
+      ├─ hard 仍 not_found → fallback_react_phase (单变量 ReAct, 仅 hard 触发)
+      │                                  ──[conditional]──┐
+      │                                  │  hard 仍 not_found → END (hard_failure)
+      │                                  │  found → coverage_validator
+      │                                  │
+      └─ 否则 → coverage_validator (代码批量 csmar_probe_query)
+                  → coverage_validation_handler ──[conditional]──┐
+                      │                                          │
+                      │  can_materialize=true                    │  写 found/substituted + manifest
+                      │                                          │
+                      │  hard 失败 → END (hard_failure)          │
+                      │                                          │
+                      │  soft 失败 + 候选 → 累积 substitute_queue│
+                      │                                          │
+                      │  substitute_queue 非空 AND              ─┘
+                      │  substitute_round < max_rounds  → 回到 planning_agent
+                      │                                          
+                      └─ 否则 → END (success)
 ```
 
-子图五个节点：
+子图六个节点：
 
-| 节点                          | 类型       | 职责                                                                                                              |
-| ----------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------- |
-| variable_dispatcher           | 纯代码     | 从 discovery_queue 取下一个变量，设置当前变量上下文                                                                |
-| variable_react                | 内层 ReAct | 针对当前单个变量执行字段发现（search_field / list_tables / bulk_schema / get_table_schema），受 per_variable_max_calls 约束 |
-| field_existence_handler       | 纯代码     | 判定字段是否存在；found 推入 validation_queue，not_found 走 Hard/Soft 路由                                          |
-| coverage_validator            | 纯代码     | 对 validation_queue 中每条候选批量调用 `csmar_probe_query`，把响应解码为 CoverageOutcome                            |
-| coverage_validation_handler   | 纯代码     | 通过 → 写 ProbeReport / DownloadManifest；失败 → 等同 not_found 路由（hard 终止 / soft 触发 substitute / 链终止）  |
+| 节点                          | 类型           | 职责                                                                                                          |
+| ----------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------- |
+| planning_agent                | LLM ReAct      | 入口承担轮次初始化(首轮取 spec.variables / substitute 重试取 substitute_queue)；用 `list_tables` 推断每个变量的 (target_db, candidate_table_codes[])，受全局预算约束 |
+| bulk_schema_phase             | 纯代码 + 工具  | 收集所有候选 table_code 跨变量去重，一次 `csmar_bulk_schema` 拉回 schema 字典(含 `field_label` / `role_tags`)；同时灌进 csmar-mcp 本地缓存 |
+| verification_phase            | LLM 分桶批量   | 按 (db, table) 分桶，每桶一次 `with_structured_output()` 调用判定字段；输出按变量合并(任一桶 found 即 found)   |
+| fallback_react_phase          | LLM 单变量 ReAct | 仅 hard 变量在 verification 仍 not_found 时启用；带 list_tables + bulk_schema + get_table_schema 三件套兜底,负责修复 Planning 漏选候选表的场景 |
+| coverage_validator            | 纯代码         | 对 validation_queue 中每条候选批量调用 `csmar_probe_query`，把响应解码为 CoverageOutcome                       |
+| coverage_validation_handler   | 纯代码         | 通过 → 写 ProbeReport / DownloadManifest；失败 → 等同 not_found 路由(hard 终止 / soft 累积 substitute_queue)   |
 
 **设计要点：**
 
-- 每个变量的 csmar_mcp 调用次数被隔离计数（`per_variable_max_calls` 通过 `ToolCallLimitMiddleware` 在 Agent 一轮里强制），不会出现某个难找的变量耗光全局预算
-- Soft 替代变量被当作新任务塞回 discovery_queue，复用同一条内层 ReAct 路径以及随后的覆盖率验证；不需要额外的「替代搜寻」节点
-- Agent 只判定字段在表中是否存在，**不再估算 record_count / 行数**——覆盖率与可物化由 `coverage_validator` 以代码批量验证（阈值 = `csmar_probe_query` 自带的 `can_materialize` 与 `invalid_columns`，与 MCP 服务端保持一致）
-- 替代成功后由 coverage_validation_handler 把新变量回写到 `EmpiricalSpec`/`ModelPlan`（节点内部状态 mutation），并保留对原变量名的 SubstitutionTrace
-- `data_download` 节点会再调一次 `csmar_probe_query` 取最新 validation_id；当前不复用本阶段的 validation_id 以避免 TTL 过期回滚成本（MCP 侧缓存命中开销极低）
+- 字段发现由广度优先流水线主导，跨变量复用 list_tables 与 bulk_schema 的结果，最优路径 = 1 次 Planning + 1 次 bulk_schema + #候选(db,table) 桶次 Verification
+- 预算控制改为分层：Planning Agent 全局 `planning_agent_max_calls`；Fallback 单变量 `fallback_react_max_calls`；substitute 重试 `substitute_max_rounds`(默认 1)
+- Soft 替代变量整批累积进 substitute_queue，本轮跑完后整批重新进入流水线(从 planning_agent 开始)；轮次上限防止无限循环
+- 字段发现/兜底输出 `record_count` 留 null，覆盖率与可物化由 `coverage_validator` 代码批量验证(`can_materialize` / `invalid_columns` 与 MCP 服务端保持一致)
+- 替代成功后由 coverage_validation_handler 把新变量回写到 `EmpiricalSpec`/`ModelPlan`(节点内部状态 mutation)，并保留对原变量名的 SubstitutionTrace
+- Verification 阶段对 LLM 输出的 field 做后处理校验(必须出现在 schema 中)，凭空字段降级为 not_found
+- `data_download` 节点会再调一次 `csmar_probe_query` 取最新 validation_id；当前不复用本阶段的 validation_id 以避免 TTL 过期回滚成本(MCP 侧缓存命中开销极低)
 
 ---
 
@@ -166,7 +162,7 @@ probe_subgraph START
 
 - input：`EmpiricalSpec` + `ModelPlan`
 - action（拆为两阶段）：
-  - **阶段一 字段发现（Agent）**：LLM 在白名单工具集（`csmar_search_field` / `csmar_list_tables` / `csmar_bulk_schema` / `csmar_get_table_schema`）下完成 `database → table → schema → 字段是否存在` 的下钻，只输出 `(database, table, field, key_fields, filters.condition?)` 与 status；**不再估算 record_count / 行数**
+  - **阶段一 字段发现（Agent）**：Planning Agent 用 `csmar_list_tables` 给出每个变量的 (target_db, candidate_tables[])，代码层批量调 `csmar_bulk_schema` 拉 schema，Verification 分桶判定字段是否存在；hard 变量仍 not_found 时启用 Fallback ReAct（`csmar_list_tables` + `csmar_bulk_schema` + `csmar_get_table_schema` 三件套）。整阶段只输出 `(database, table, field, key_fields, filters.condition?)` 与 status；**不再估算 record_count / 行数**
   - **阶段二 覆盖率验证（代码）**：对阶段一所有 found 的字段批量调用 `csmar_probe_query`（dry-run），用 MCP 自带的 `can_materialize` / `invalid_columns` 作为门禁；通过即写入 `DownloadManifest`，失败则等同 `not_found` 走与字段未找到一致的 Hard/Soft 路由
   - 若 Hard Contract 变量在任一阶段失败，立即整体硬失败
   - 若 Soft Contract 变量在阶段一失败但 Agent 给出 substitute 候选，候选会重新走完整两阶段（字段发现 + 覆盖率验证）；阶段二失败的 soft 变量同样可以触发 substitute 重试，substitute 任务再失败则链终止视为 `not_found`

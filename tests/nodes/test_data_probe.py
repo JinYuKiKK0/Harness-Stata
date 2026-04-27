@@ -12,7 +12,12 @@ from typing import Any
 
 import pytest
 
-from harness_stata.nodes.data_probe import ALLOWED_REACT_TOOLS, data_probe
+from harness_stata.nodes.data_probe import (
+    ALLOWED_REACT_TOOLS,
+    FALLBACK_TOOLS,
+    PLANNING_TOOLS,
+    data_probe,
+)
 from harness_stata.state import EmpiricalSpec, ModelPlan, WorkflowState
 
 
@@ -49,22 +54,28 @@ def test_data_probe_empty_variables_raises(
 def test_data_probe_react_tool_whitelist_pinned() -> None:
     """字段发现阶段允许暴露给 Agent 的工具集是显式白名单。
 
-    上线后 csmar-mcp 若新增工具,默认不进白名单——除非显式更新本节点。
-    特别地,csmar_list_databases / csmar_probe_query / csmar_materialize_query /
-    csmar_refresh_cache 永远不应出现在 Agent 的工具集里。
+    Planning Agent 只能用 list_tables(候选表必须出自 list_tables 返回);
+    Fallback 单变量 ReAct 可以用 list_tables + bulk_schema + get_table_schema。
+    csmar_search_field / csmar_list_databases / probe_query /
+    materialize_query / refresh_cache 永远不应出现在任何 Agent 的工具集里。
     """
-    assert ALLOWED_REACT_TOOLS == frozenset(
+    assert PLANNING_TOOLS == frozenset({"csmar_list_tables"})
+    assert FALLBACK_TOOLS == frozenset(
         {
-            "csmar_search_field",
             "csmar_list_tables",
             "csmar_bulk_schema",
             "csmar_get_table_schema",
         }
     )
+    # ALLOWED_REACT_TOOLS 保留为 FALLBACK_TOOLS 的别名,保证旧调用方契约
+    assert ALLOWED_REACT_TOOLS == FALLBACK_TOOLS
+
     forbidden = {
+        "csmar_search_field",
         "csmar_list_databases",
         "csmar_probe_query",
         "csmar_materialize_query",
         "csmar_refresh_cache",
     }
-    assert ALLOWED_REACT_TOOLS.isdisjoint(forbidden)
+    assert PLANNING_TOOLS.isdisjoint(forbidden)
+    assert FALLBACK_TOOLS.isdisjoint(forbidden)

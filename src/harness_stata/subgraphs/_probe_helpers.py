@@ -1,6 +1,6 @@
-"""Pure helpers for the CSMAR probe subgraph.
+"""Pure helpers for the CSMAR probe subgraph (报告/manifest/coverage 部分)。
 
-This module hosts everything that is *not* graph topology:
+本模块只保留与 **单变量结果固化** 相关的纯逻辑:
 
 - 时间归一化与 download_manifest 的 filters 构造
 - 变量替换(EmpiricalSpec / ModelPlan 同步改写)
@@ -8,8 +8,8 @@ This module hosts everything that is *not* graph topology:
 - ProbeReport / DownloadManifest 的构造与合并 helper
 - probe_query (覆盖率验证)阶段的 payload 构造 / 响应解码 / 异步执行入口
 
-子图工厂 ``build_probe_subgraph`` 只保留节点函数与拓扑布线,所有数据加工/IO 都
-经由本模块。这样保持 subgraph 文件聚焦,也让单元测试可以独立验证 helper。
+**批量字段发现流水线**(Planning Agent / Bulk Schema / Verification 分桶 / 桶级合并)
+独立放在 :mod:`harness_stata.subgraphs._probe_pipeline`,以保持每个文件聚焦单一职责。
 """
 
 from __future__ import annotations

@@ -2,21 +2,24 @@
 
 ## 当前焦点
 
-数据探针节点(node 3)架构重构:工具暴露收紧 + probe_query 阶段独立。
+data_probe 子图 prompt/工具暴露收紧:移除 search_field、删除 bulk_search_phase 预筛。
 
 ## 当前上下文
 
 <!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
-- 本次会话 — data_probe 节点 + probe_subgraph 二阶段化重构:
-  - 工具暴露:Agent 工具集从 7 个收紧为白名单 4 个(`csmar_search_field` / `csmar_list_tables` / `csmar_bulk_schema` / `csmar_get_table_schema`)。`csmar_list_databases` 由节点入口共享注入,`csmar_probe_query` 单独透传给子图作 `probe_tool`,`csmar_materialize_query` / `csmar_refresh_cache` 完全剥离。
-  - 子图拓扑:从 3 节点升级为 5 节点 / 双队列 / 双阶段 — `variable_dispatcher → variable_react → field_existence_handler → coverage_validator → coverage_validation_handler`。Agent 只判定字段存在性,coverage 由 `csmar_probe_query` 批量代码调用决定 `can_materialize` + `invalid_columns`。
-  - 失败语义:覆盖率失败等同 `not_found`,复用现有 hard / soft / substitute 状态机(hard → `failed_hard_contract` 终止;soft 主任务 → 触发 substitute 重新走双阶段;substitute 任务再失败 → 链终止 `not_found`)。
-  - Helper 下沉:所有 ProbeReport / DownloadManifest 构造与变量替换逻辑下沉到 `subgraphs/_probe_helpers.py`(连同新增的 `build_probe_query_payload` / `parse_probe_query_response` / `run_probe_coverage`),`probe_subgraph.py` 只剩拓扑装配。
-  - Prompt 重写:`prompts/data_probe.md` 全面重写,首选 `csmar_search_field`(零远程),空命中回退到 `csmar_list_tables` + `csmar_bulk_schema`;明确告知 Agent 不再估算 record_count(由代码兜底)。
-  - 文档同步:`docs/empirical-analysis-workflow.md` 探针子图段落同步更新为 5 节点 / 双阶段拓扑 + 工具暴露策略。
-  - 测试:`tests/subgraphs/test_probe_subgraph.py` 由 11 case 升级为 16 case(新增 4 个 coverage-stage 路由 case + 3 个响应解码 helper case);`tests/nodes/test_data_probe.py` 新增工具白名单 pinning 断言(共 4 case)。
+- 本次会话 — 基于 LangSmith trace 排查 data_probe 死循环 + 浪费工具预算的根因,完成第一阶段修复:
+  - 根因 1:`csmar_search_field` 是 field_code/table_code 子串匹配,对中文经济变量名("总资产收益率"等)永不命中;Planning/Fallback prompt 把它包装成"零成本/首选",诱导 LLM 反复重试直到耗尽 `planning_agent_max_calls` / `fallback_react_max_calls`。
+  - 根因 2:`bulk_search_phase` 用变量名做精确匹配,但 CSMAR 财务库字段是 `F0xxxxx` 代码,bulk_search 几乎永远返回空 misses,只是空跑一次工具调用。
+  - 修复 — 工具暴露收紧:`PLANNING_TOOLS` = `{csmar_list_tables}`,`FALLBACK_TOOLS` = `{csmar_list_tables, csmar_bulk_schema, csmar_get_table_schema}`;`csmar_search_field` 完全不再暴露给任何 Agent。
+  - 修复 — 子图拓扑从 7 节点降为 6 节点:删除 `bulk_search_phase`,轮次初始化逻辑(首轮 vs substitute)合入 `planning_agent` 入口;substitute 重试回边目标改为 `planning_agent`。
+  - 修复 — 删除 `_probe_pipeline.bulk_search_unhit` / `_search_one`;`ProbeNodeConfig.search_tool` 字段移除;`build_probe_subgraph` 不再校验 search_tool 存在。
+  - 修复 — Prompt 同步:`data_probe_planning.md` 删除 search_field 工具行与预算提示;`data_probe_fallback.md` 改为"list_tables → bulk_schema → 按 field_label 匹配"的两步路径,明确利用 csmar-mcp 已新增的 `field_label`/`role_tags` 字段做语义匹配。
+  - 测试同步:`tests/subgraphs/test_probe_subgraph.py` 删除 `must_include_search_field` 断言,默认参数改为 `[csmar_list_tables]`;`tests/subgraphs/test_probe_helpers.py` 删除 `TestBulkSearchUnhit` 测试类;`tests/nodes/test_data_probe.py` 白名单断言更新。
+  - 文档同步:`docs/empirical-analysis-workflow.md` 探针子图段落 7 节点 → 6 节点,工具暴露策略段落同步删除 search_field 引用。
   - `uv run scripts/check.py` 6/6 通过。
+  - 仍未做(留作下一轮):方案 B(verify field_label 在 verification prompt 里渲染正确),方案 C(用 `role_tags` 由代码层直接确定 key_fields,免 LLM 猜)。
+  - 仍未验证:LangSmith 实跑确认 data_probe 死循环已消失。
 
 ## 下一步
 

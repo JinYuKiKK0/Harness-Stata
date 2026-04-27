@@ -1,12 +1,17 @@
 """Data probe node — third node in the workflow.
 
 Pure-code wrapper around :func:`build_probe_subgraph`. 在节点入口先调用一次
-``csmar_list_databases`` 把已购数据库清单作为共享上下文注入子图(每个变量的
-Agent 共用),然后把 csmar-mcp 的工具按照白名单切片,**只把字段发现工具集**
-(``csmar_search_field`` / ``csmar_list_tables`` / ``csmar_bulk_schema`` /
-``csmar_get_table_schema``)绑定给 Agent;``csmar_probe_query`` 单独提取作为
-``probe_tool`` 透传给子图,由其覆盖率验证阶段以代码方式批量调用。
-``csmar_materialize_query`` / ``csmar_refresh_cache`` 不在本节点暴露范围内。
+``csmar_list_databases`` 把已购数据库清单作为共享上下文注入子图,然后把
+csmar-mcp 的工具按白名单切片,分别交给 Planning 阶段(仅 ``csmar_list_tables``)
+与兜底单变量 ReAct 阶段(``csmar_list_tables`` + ``csmar_bulk_schema`` +
+``csmar_get_table_schema``)。
+
+``csmar_search_field`` 不暴露给任何 Agent:它是 field_code/table_code 的子串匹配,
+对中文经济变量名(如"总资产收益率")永不命中,实际使用中只会引发反复重试。
+``csmar_bulk_schema`` 既透传给子图供代码层在 Planning 之后批量拉 schema,也作为
+fallback Agent 的工具暴露;``csmar_probe_query`` 由覆盖率验证阶段以代码方式调用,
+不绑 Agent。``csmar_materialize_query`` / ``csmar_refresh_cache`` 不在本节点
+暴露范围内。
 
 Node 与子图均为 async,通过 ``await subgraph.ainvoke(...)`` 走 MCP stdio,
 满足 ``langgraph dev`` 的 blockbuster 检测与 LangGraph 部署对纯异步的要求。
@@ -35,24 +40,24 @@ from harness_stata.subgraphs.probe_subgraph import ProbeState, build_probe_subgr
 # Tool exposure policy
 # ---------------------------------------------------------------------------
 
-# 字段发现阶段允许暴露给 Agent 的工具白名单:
-# - csmar_search_field    本地 cache 搜索(零远程调用,首选)
-# - csmar_list_tables     列出某数据库下的表(search_field 空命中时回退)
-# - csmar_bulk_schema     批量拉多张候选表的 schema(优于循环 get_table_schema)
-# - csmar_get_table_schema 单张表的 schema 精读
-# 显式排除:
-# - csmar_list_databases   节点入口已调一次,作为共享上下文注入,无需 Agent 再调
-# - csmar_probe_query      由子图覆盖率验证阶段以代码调用,不暴露给 Agent
-# - csmar_materialize_query / csmar_refresh_cache  与本节点职责无关
-ALLOWED_REACT_TOOLS: frozenset[str] = frozenset(
+# Planning Agent (阶段一) 的工具白名单:只允许 list_tables。
+# - csmar_list_tables     列出某数据库下的表(候选 table_code 必须出自此处)
+PLANNING_TOOLS: frozenset[str] = frozenset({"csmar_list_tables"})
+
+# Fallback 单变量 ReAct (阶段三兜底) 的工具白名单:列表 + schema 拉取三件套
+FALLBACK_TOOLS: frozenset[str] = frozenset(
     {
-        "csmar_search_field",
         "csmar_list_tables",
         "csmar_bulk_schema",
         "csmar_get_table_schema",
     }
 )
+
+# 兼容旧入口(测试白名单不变性):字段发现层允许暴露给任意 Agent 的工具集合
+ALLOWED_REACT_TOOLS: frozenset[str] = FALLBACK_TOOLS
+
 _LIST_DATABASES_TOOL = "csmar_list_databases"
+_BULK_SCHEMA_TOOL = "csmar_bulk_schema"
 _PROBE_QUERY_TOOL = "csmar_probe_query"
 
 
@@ -97,31 +102,44 @@ async def data_probe(state: WorkflowState) -> DataProbeOutput:
 
     async with get_csmar_tools() as tools:
         by_name = {t.name: t for t in tools}
-        missing = [
-            name for name in (_LIST_DATABASES_TOOL, _PROBE_QUERY_TOOL) if name not in by_name
-        ]
+        required = (_LIST_DATABASES_TOOL, _BULK_SCHEMA_TOOL, _PROBE_QUERY_TOOL)
+        missing = [name for name in required if name not in by_name]
         if missing:
             msg = f"csmar-mcp is missing required tools: {missing}"
             raise RuntimeError(msg)
 
         list_tool = by_name[_LIST_DATABASES_TOOL]
+        bulk_schema_tool = by_name[_BULK_SCHEMA_TOOL]
         probe_tool = by_name[_PROBE_QUERY_TOOL]
         raw_databases = await list_tool.ainvoke({})  # pyright: ignore[reportUnknownMemberType]
         available_databases_text = str(raw_databases)
 
-        react_tools = [t for t in tools if t.name in ALLOWED_REACT_TOOLS]
-        if not react_tools:
+        planning_tools = [t for t in tools if t.name in PLANNING_TOOLS]
+        fallback_tools = [t for t in tools if t.name in FALLBACK_TOOLS]
+        if not planning_tools:
             msg = (
-                f"csmar-mcp 暴露的工具与白名单不交叉,无法构建探针子图;"
-                f" 期望至少一个 {sorted(ALLOWED_REACT_TOOLS)}"
+                f"csmar-mcp 暴露的工具与 Planning 白名单不交叉,无法构建 Planning Agent;"
+                f" 期望至少一个 {sorted(PLANNING_TOOLS)}"
+            )
+            raise RuntimeError(msg)
+        if not fallback_tools:
+            msg = (
+                f"csmar-mcp 暴露的工具与 Fallback 白名单不交叉,无法构建兜底子流程;"
+                f" 期望至少一个 {sorted(FALLBACK_TOOLS)}"
             )
             raise RuntimeError(msg)
 
         subgraph = build_probe_subgraph(
-            tools=react_tools,
+            planning_tools=planning_tools,
+            fallback_tools=fallback_tools,
+            bulk_schema_tool=bulk_schema_tool,
             probe_tool=probe_tool,
-            prompt=load_prompt("data_probe"),
-            per_variable_max_calls=settings.per_variable_max_calls,
+            planning_prompt=load_prompt("data_probe_planning"),
+            verification_prompt=load_prompt("data_probe_verification"),
+            fallback_prompt=load_prompt("data_probe_fallback"),
+            planning_agent_max_calls=settings.planning_agent_max_calls,
+            fallback_react_max_calls=settings.fallback_react_max_calls,
+            substitute_max_rounds=settings.substitute_max_rounds,
         )
         initial: ProbeState = {
             "empirical_spec": spec,
@@ -135,7 +153,6 @@ async def data_probe(state: WorkflowState) -> DataProbeOutput:
         "probe_report": final["probe_report"],  # type: ignore[reportTypedDictNotRequiredAccess]
         "download_manifest": final["download_manifest"],  # type: ignore[reportTypedDictNotRequiredAccess]
     }
-    # soft-substitute 成功时子图会重建 empirical_spec / model_plan,此处仅在确实变更时回传
     final_spec = final.get("empirical_spec")
     if final_spec is not None and final_spec is not spec:
         result["empirical_spec"] = final_spec

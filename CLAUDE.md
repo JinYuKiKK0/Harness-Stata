@@ -44,7 +44,11 @@ harness-stata/
 │   │   ├── descriptive_stats.py  # 经 _agent_runner 工厂调用 create_agent
 │   │   └── regression.py         # 经 _agent_runner 工厂调用 create_agent
 │   ├── subgraphs/                # 可复用子图工厂（实现细节）
-│   │   └── probe_subgraph.py     # build_probe_subgraph(tools, per_variable_max_calls)
+│   │   ├── probe_subgraph.py     # build_probe_subgraph 工厂 + ProbeState + 路由 + 装配
+│   │   ├── _probe_nodes.py       # 阶段 1~4 节点函数 (planning / bulk_schema / verification / fallback)；planning 入口同时承担轮次初始化
+│   │   ├── _probe_coverage.py    # 阶段 5~6 节点函数 (coverage_validator / coverage_validation_handler)
+│   │   ├── _probe_pipeline.py    # 批量字段发现流水线纯逻辑（VariablePlan / 分桶 / 合并 / bulk_schema 解码）
+│   │   └── _probe_helpers.py     # 报告/manifest 构造 + coverage 解码 + 时间归一化等共享 helper
 │   ├── prompts/                  # Markdown 格式 system prompt
 │   │   └── __init__.py           # 提供 load_prompt(name)
 │   └── clients/                  # 外部依赖统一入口（contextmanager 管理生命周期）
