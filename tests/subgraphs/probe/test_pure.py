@@ -122,8 +122,8 @@ class TestParseBulkSchemaResponse:
                     "table_code": "T1",
                     "source": "live",
                     "fields": [
-                        {"field_name": "Stkcd", "field_label": "证券代码"},
-                        {"field_name": "ROA", "field_label": "总资产收益率"},
+                        {"field_code": "Stkcd", "field_label": "证券代码"},
+                        {"field_code": "ROA", "field_label": "总资产收益率"},
                     ],
                     "error": None,
                 },
@@ -136,7 +136,7 @@ class TestParseBulkSchemaResponse:
                 {
                     "table_code": "T3",
                     "source": "cache",
-                    "fields": [{"field_name": "F1"}],
+                    "fields": [{"field_code": "F1"}],
                     "error": None,
                 },
             ],
@@ -146,7 +146,7 @@ class TestParseBulkSchemaResponse:
         }
         result = parse_bulk_schema_response(raw)
         assert set(result.schema_dict.keys()) == {"T1", "T3"}
-        assert [f["field_name"] for f in result.schema_dict["T1"]] == ["Stkcd", "ROA"]
+        assert [f["field_code"] for f in result.schema_dict["T1"]] == ["Stkcd", "ROA"]
         assert result.failed_table_codes == ["T2"]
 
     def test_non_dict_returns_empty(self) -> None:
@@ -155,7 +155,7 @@ class TestParseBulkSchemaResponse:
         assert result.failed_table_codes == []
 
     def test_skips_items_without_table_code(self) -> None:
-        raw = {"items": [{"source": "live", "fields": [{"field_name": "F"}]}]}
+        raw = {"items": [{"source": "live", "fields": [{"field_code": "F"}]}]}
         result = parse_bulk_schema_response(raw)
         assert result.schema_dict == {}
 
@@ -229,8 +229,8 @@ class TestMergeBucketResults:
     def test_first_valid_found_wins(self) -> None:
         roa = _var("ROA")
         schema_dict = {
-            "T1": [{"field_name": "ROA"}],
-            "T2": [{"field_name": "ROA"}],
+            "T1": [{"field_code": "ROA"}],
+            "T2": [{"field_code": "ROA"}],
         }
         bucket_outputs = [
             (
@@ -269,7 +269,7 @@ class TestMergeBucketResults:
 
     def test_field_not_in_schema_drops_to_not_found(self) -> None:
         roa = _var("ROA")
-        schema_dict = {"T1": [{"field_name": "Stkcd"}]}  # ROA 不在
+        schema_dict = {"T1": [{"field_code": "Stkcd"}]}  # ROA 不在
         bucket_outputs = [
             (
                 BucketKey("DB", "T1"),
@@ -297,13 +297,13 @@ class TestFormatSchemaForPrompt:
         block = format_schema_for_prompt(
             "T1",
             [
-                {"field_name": "Stkcd", "field_label": "证券代码", "data_type": "varchar"},
-                {"field_name": "ROA", "field_label": None, "data_type": None},
-                {"field_name": ""},  # 空 field_name 应被跳过
+                {"field_code": "Stkcd", "field_label": "证券代码"},
+                {"field_code": "ROA", "field_label": None},
+                {"field_code": ""},  # 空 field_code 应被跳过
             ],
         )
         assert "Table `T1` (3 fields)" in block
-        assert "- `Stkcd` — 证券代码 | type=varchar" in block
+        assert "- `Stkcd` — 证券代码" in block
         assert "- `ROA`" in block
-        # 空 field_name 那行被跳过
+        # 空 field_code 那行被跳过
         assert block.count("- `") == 2

@@ -164,20 +164,11 @@ def format_schema_for_prompt(table_code: str, fields: list[dict[str, Any]]) -> s
     """Render a single table's schema as a compact markdown block for prompts."""
     lines = [f"### Table `{table_code}` ({len(fields)} fields)"]
     for f in fields:
-        name = f.get("field_name") or ""
+        name = f.get("field_code") or ""
         if not name:
             continue
         label = f.get("field_label") or ""
-        dtype = f.get("data_type") or ""
-        desc = f.get("field_description") or ""
-        suffix_parts: list[str] = []
-        if label:
-            suffix_parts.append(label)
-        if dtype:
-            suffix_parts.append(f"type={dtype}")
-        if desc:
-            suffix_parts.append(desc)
-        suffix = f" — {' | '.join(suffix_parts)}" if suffix_parts else ""
+        suffix = f" — {label}" if label else ""
         lines.append(f"- `{name}`{suffix}")
     return "\n".join(lines)
 
@@ -261,7 +252,7 @@ def _pick_first_valid_found(
             continue
         schema = schema_dict.get(bucket_key.table, [])
         valid_fields = {
-            f["field_name"].strip() for f in schema if isinstance(f.get("field_name"), str)
+            f["field_code"].strip() for f in schema if isinstance(f.get("field_code"), str)
         }
         if finding.field.strip() not in valid_fields:
             continue

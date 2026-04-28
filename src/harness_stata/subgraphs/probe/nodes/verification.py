@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from harness_stata.clients.llm import get_chat_model
 from harness_stata.state import VariableDefinition
@@ -42,6 +42,7 @@ async def verification_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[st
             "download_manifest": manifest,
         }
 
+    # 分桶
     variables_by_name = {v["name"]: v for v in planning_queue}
     buckets, unplanned = bucket_plans(plans, variables_by_name, schema_dict)
 
@@ -53,6 +54,7 @@ async def verification_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[st
             unplanned.append(var)
             unplanned_names.add(name)
 
+    # 并发调LLM跑分桶
     bucket_outputs = await _run_verification_buckets(buckets, schema_dict, cfg)
     merged = merge_bucket_results(bucket_outputs, planning_queue, schema_dict)
 
@@ -92,6 +94,7 @@ async def _run_verification_buckets(
     chat = get_chat_model().with_structured_output(
         BucketVerificationOutput, method="function_calling"
     )
+    system = SystemMessage(content=cfg.verification_prompt)
     bucket_outputs: list[tuple[BucketKey, BucketVerificationOutput]] = []
     for bucket_key, vars_in_bucket in buckets.items():
         schema_block = format_schema_for_prompt(
@@ -104,14 +107,13 @@ async def _run_verification_buckets(
         ]
         human = HumanMessage(
             content=(
-                f"{cfg.verification_prompt}\n\n"
                 f"Bucket: database=`{bucket_key.database}`, table=`{bucket_key.table}`\n\n"
                 f"{schema_block}\n\n"
                 f"Variables to judge ({len(vars_in_bucket)} total):\n" + "\n".join(var_lines)
             )
         )
         try:
-            raw_out: Any = await chat.ainvoke([human])
+            raw_out: Any = await chat.ainvoke([system, human])
         except Exception:
             raw_out = BucketVerificationOutput(results=[])
         if isinstance(raw_out, BucketVerificationOutput):

@@ -36,7 +36,7 @@ VERIFICATION_OUTPUT_SPEC = """你的输出必须严格按 BucketVerificationOutp
 每个变量是否能在给定 schema 中找到对应字段。规则:
 
 - results 必须为输入中**全部**变量给出一条记录,顺序保持一致。
-- field 必须**严格出自给定 schema 的 field_name**,绝不能创造 schema 之外的列名。
+- field 必须**严格出自给定 schema 的 field_code**,绝不能创造 schema 之外的列名。
 - key_fields 同样从 schema 中挑选,通常是主键 + 时间键。
 - filters 不要写时间范围,只在 CSMAR 需要额外样本筛选时填 {"condition": "..."}。
 - 不要输出 database / table — 由代码层从 bucket key 回填。
