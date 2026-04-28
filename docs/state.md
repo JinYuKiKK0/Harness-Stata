@@ -10,21 +10,20 @@
 
 | 子图       | 从主图读入                              | 写回主图                                                                                   | 子图内部（不泄漏）                                                                   |
 | ---------- | --------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| 数据探针   | EmpiricalSpec, ModelPlan                | ProbeReport, DownloadManifest, workflow_status\*(hard_failure 时)                          | variable_queue, current_variable, per_variable_call_count, messages                  |
-| 数据清洗   | EmpiricalSpec, DownloadedFiles          | MergedDataset                                                           | messages, iteration_count                                           |
-| 描述性统计 | EmpiricalSpec, ModelPlan, MergedDataset | DescStatsReport                                                         | messages, iteration_count                                           |
-| 基准回归   | ModelPlan, MergedDataset                | RegressionResult                                                        | messages, iteration_count                                           |
+| 数据探针   | EmpiricalSpec, ModelPlan                | ProbeReport, DownloadManifest, workflow_status\*(hard_failure 时)                          | available_databases, pending_variables, planning_queue, plans, schema_dict, pending_hard_fallbacks, validation_queue, coverage_outcomes, messages |
+| 数据清洗   | EmpiricalSpec, DownloadedFiles          | MergedDataset                                                           | messages（create_agent 内部 MessagesState，迭代上限由 ModelCallLimitMiddleware 计数） |
+| 描述性统计 | EmpiricalSpec, ModelPlan, MergedDataset | DescStatsReport                                                         | messages（create_agent 内部 MessagesState，迭代上限由 ModelCallLimitMiddleware 计数） |
+| 基准回归   | ModelPlan, MergedDataset                | RegressionResult                                                        | messages（create_agent 内部 MessagesState，迭代上限由 ModelCallLimitMiddleware 计数） |
 
 关键隔离项：
 
 - `messages`（LLM 对话历史 / tool call 记录）是子图内部 ReAct 循环的驱动状态，体量最大，必须隔离，避免下游节点的 LLM 上下文被上游对话污染
-- 探针子图存在额外一层嵌套（probe_subgraph → variable_react 内层 ReAct），内层的 messages 和 per_variable_call_count 对外层 probe_subgraph 也应隔离
 
 ### 3. State reducer 策略
 
 所有主图切片均采用 overwrite 语义（后写覆盖），无需自定义 reducer。
 
-理由：每个切片只有唯一写入者，无并行分支，不存在多节点同时写同一切片的冲突。探针对 EmpiricalSpec/ModelPlan 的回写本质是"用新版本替换旧版本"；ProbeReport 虽逐变量累积，但累积发生在子图内部，写回主图时是一次性写入完整对象。
+理由：每个切片只有唯一写入者，无并行分支，不存在多节点同时写同一切片的冲突。ProbeReport 虽逐变量累积，但累积发生在子图内部，写回主图时是一次性写入完整对象。
 
 ### 4. 工作流级元数据
 

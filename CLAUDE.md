@@ -62,6 +62,7 @@ harness-stata/
 │   └── clients/                  # 外部依赖统一入口（contextmanager 管理生命周期）
 │       ├── csmar.py              # CSMAR-Data-MCP 客户端适配
 │       ├── stata.py              # Stata-Executor-MCP 客户端适配
+│       ├── mcp.py                # MCP 工具调用 helper（structured_content 解码）
 │       └── llm.py                # LLM 客户端封装
 ├── csmar-mcp/                    # 外部 MCP submodule，主应用通过 stdio MCP 协议调用
 ├── stata-executor/               # 外部 MCP submodule，主应用通过 stdio MCP 协议调用
@@ -75,13 +76,12 @@ harness-stata/
 
 ### 会话开始
 
-1. 运行 uv run scripts/init.py 跑一遍质量门禁并了解项目现状**调用时不加任何 `| tail` 或 `| head` 截断，直接读取完整输出**。
-2. 读取 `specs/PROGRESS.md`和`specs/feature_list.json`，挑选一个 `passes:false` 且 `depends_on` 全部已 `passes:true` 的 feature 作为本次会话目标。若多项可选，结合 `specs/PROGRESS.md` 当前焦点与 MVP 价值推断当前最重要者。
-3. 在编写任何代码前，宣布将要处理的 feature id 与目标。
+1. 读取 `git log`,`specs/PROGRESS.md`和`specs/feature_list.json`，挑选一个 `passes:false` 且 `depends_on` 全部已 `passes:true` 的 feature 作为本次会话目标。若多项可选，结合 `specs/PROGRESS.md` 当前焦点与 MVP 价值推断当前最重要者。
+2. 在编写任何代码前，宣布将要处理的 feature id 与目标。
 
 ### 会话结束
-- 完成任何文件变更后运行`uv run scripts/check.py`统一质量门禁。一次性跑完 pytest、ruff、pyright、import-linter、custom-lint 全部检查。**调用时不加任何 `| tail` 或 `| head` 截断，直接读取完整输出**
-- 自检本次目标 feature 的 `steps` 全部走通且 `scripts/check.py` 5/5 通过后，将该 feature 的 `passes` 改为 true（`passes` 翻转无需用户确认）
+- 完成任何文件变更后运行`uv run scripts/check.py`统一质量门禁。一次性跑完 pytest、ruff lint、ruff format、pyright、import-linter、custom-lint 全部检查。**调用时不加任何 `| tail` 或 `| head` 截断，直接读取完整输出**
+- 自检本次目标 feature 的 `steps` 全部走通且 `scripts/check.py` 6/6 通过后，将该 feature 的 `passes` 改为 true（`passes` 翻转无需用户确认）
 - 完成任何实质进展后更新 `specs/PROGRESS.md`：
   1. 推进"当前焦点"和"当前上下文"
   2. 从"下一步"移走已做完的项

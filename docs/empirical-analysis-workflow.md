@@ -12,7 +12,7 @@
 | --- | ---------------------- | --------- | ------------------------------------------------------------------ |
 | 1   | 需求解析               | 单轮 LLM  | EmpiricalSpec                                                      |
 | 2   | 模型与基准线构建       | 单轮 LLM  | ModelPlan                                                          |
-| 3   | 数据探针               | ReAct LLM | ProbeReport + DownloadManifest；可内部回写 EmpiricalSpec/ModelPlan |
+| 3   | 数据探针               | ReAct LLM | ProbeReport + DownloadManifest                                     |
 | 4   | Human In the Loop      | 纯代码    | hitl_decision                                                      |
 | 5   | 数据批量获取           | 纯代码    | DownloadedFiles                                                    |
 | 6   | 数据清洗               | ReAct LLM | MergedDataset                                                      |
@@ -79,17 +79,17 @@ LangChain agent 内部负责模型循环与工具执行：
 
 各节点差异仅在绑定的 tools 集合与 system prompt：
 
-| 节点       | tools                         |
-| ---------- | ----------------------------- |
-| 数据清洗   | 文件读写 + Python 代码执行    |
-| 描述性统计 | 文件读写 + stata-executor-mcp |
-| 基准回归   | 文件读写 + stata-executor-mcp |
+| 节点       | tools                                       |
+| ---------- | ------------------------------------------- |
+| 数据清洗   | 节点内联 `run_sql`（DuckDB 内存连接共享会话） |
+| 描述性统计 | stata-executor-mcp 工具集（`run_do` 等）     |
+| 基准回归   | stata-executor-mcp 工具集（`run_do` 等）     |
 
 #### 数据探针子图（节点 3）
 
 数据探针采用「批量字段发现 + 兜底单变量 ReAct + 批量覆盖率验证」的六节点单向流水线。核心设计：把字段发现从「按变量串行 ReAct」改为「全局规划 → bulk schema → 桶级验证」的代码主导广度优先流水线，跨变量复用 schema 拉取与上下文，让 `csmar_bulk_schema` 真正发挥作用；只对 hard 变量在桶级验证仍 not_found 时启用单变量 ReAct 兜底（修复 Planning Agent 漏选候选表的场景）。Soft 变量找不到直接记 `not_found`,不再尝试替代变量。
 
-**工具暴露策略**：节点入口先调一次 `csmar_list_databases` 把已购数据库清单作为共享上下文注入子图。Planning Agent 只绑 `csmar_list_tables`（候选 table_code 必须出自 `list_tables` 返回，禁止盲猜）。Verification 阶段不绑任何工具（直接 `with_structured_output()`）。Fallback 单变量 ReAct 绑 `csmar_list_tables` + `csmar_bulk_schema` + `csmar_get_table_schema` 三件套。`csmar_search_field` 不暴露给任何 Agent —— 它是 field_code/table_code 子串匹配，对中文经济变量名几乎永不命中，实测会引发 LLM 反复重试。`csmar_probe_query` 仅由 coverage_validator 代码层调用，`csmar_materialize_query` / `csmar_refresh_cache` 完全不在本节点暴露。
+**工具暴露策略**：节点入口先调一次 `csmar_list_databases` 把已购数据库清单作为共享上下文注入子图。Planning Agent 只绑 `csmar_list_tables`（候选 table_code 必须出自 `list_tables` 返回，禁止盲猜）。Verification 阶段不绑任何工具（直接 `with_structured_output()`）。Fallback 单变量 ReAct 绑 `csmar_list_tables` + `csmar_get_table_schema` 两件套。`csmar_bulk_schema` 仅由 bulk_schema_phase 代码层调用，不绑给任何 Agent；`csmar_probe_query` 仅由 coverage_validator 代码层调用；`csmar_materialize_query` / `csmar_refresh_cache` / `csmar_search_field` 完全不在本节点暴露。
 
 ```
 probe_subgraph START
@@ -118,7 +118,7 @@ probe_subgraph START
 | planning_agent                | LLM ReAct      | 取 spec.variables 全部变量；用 `list_tables` 推断每个变量的 (target_db, candidate_table_codes[])，受全局预算约束 |
 | bulk_schema_phase             | 纯代码 + 工具  | 收集所有候选 table_code 跨变量去重，一次 `csmar_bulk_schema` 拉回 schema 字典(含 `field_label` / `role_tags`)；同时灌进 csmar-mcp 本地缓存 |
 | verification_phase            | LLM 分桶批量   | 按 (db, table) 分桶，每桶一次 `with_structured_output()` 调用判定字段；输出按变量合并(任一桶 found 即 found);soft not_found 直接记入报告 |
-| fallback_react_phase          | LLM 单变量 ReAct | 仅 hard 变量在 verification 仍 not_found 时启用；带 list_tables + bulk_schema + get_table_schema 三件套兜底,负责修复 Planning 漏选候选表的场景 |
+| fallback_react_phase          | LLM 单变量 ReAct | 仅 hard 变量在 verification 仍 not_found 时启用；带 list_tables + get_table_schema 两件套兜底,负责修复 Planning 漏选候选表的场景 |
 | coverage_validator            | 纯代码         | 对 validation_queue 中每条候选批量调用 `csmar_probe_query`，把响应解码为 CoverageOutcome                       |
 | coverage_validation_handler   | 纯代码         | 通过 → 写 ProbeReport / DownloadManifest；hard 失败 → END (hard_failure)；soft 失败 → 写 not_found              |
 
@@ -134,7 +134,7 @@ probe_subgraph START
 
 ### 需求解析
 
-- input：用户填写的实证要求表单，必填：核心解释变量 X、被解释变量 Y、样本范围、时间范围、数据频率
+- input：用户填写的实证要求表单，必填：研究选题 topic、核心解释变量 X、被解释变量 Y、样本范围、时间范围（起止）、数据频率
 - action：
   - LLM 以表单为准，初步推断 X、Y，并自行拟定基础的控制变量
   - 同时整理目标分析粒度、关键主键、时间键
@@ -153,7 +153,7 @@ probe_subgraph START
 
 - input：`EmpiricalSpec` + `ModelPlan`
 - action（拆为两阶段）：
-  - **阶段一 字段发现（Agent）**：Planning Agent 用 `csmar_list_tables` 给出每个变量的 (target_db, candidate_tables[])，代码层批量调 `csmar_bulk_schema` 拉 schema，Verification 分桶判定字段是否存在；hard 变量仍 not_found 时启用 Fallback ReAct（`csmar_list_tables` + `csmar_bulk_schema` + `csmar_get_table_schema` 三件套）。整阶段只输出 `(database, table, field, key_fields, filters.condition?)` 与 status；**不再估算 record_count / 行数**
+  - **阶段一 字段发现（Agent）**：Planning Agent 用 `csmar_list_tables` 给出每个变量的 (target_db, candidate_tables[])，代码层批量调 `csmar_bulk_schema` 拉 schema，Verification 分桶判定字段是否存在；hard 变量仍 not_found 时启用 Fallback ReAct（`csmar_list_tables` + `csmar_get_table_schema` 两件套）。整阶段只输出 `(database, table, field, key_fields, filters.condition?)` 与 status；**不再估算 record_count / 行数**
   - **阶段二 覆盖率验证（代码）**：对阶段一所有 found 的字段批量调用 `csmar_probe_query`（dry-run），用 MCP 自带的 `can_materialize` / `invalid_columns` 作为门禁；通过即写入 `DownloadManifest`，失败则等同 `not_found` 走与字段未找到一致的 Hard/Soft 路由
   - 若 Hard Contract 变量在任一阶段失败，立即整体硬失败
   - 若 Soft Contract 变量在任一阶段失败,直接记 `not_found`,不再尝试替代变量

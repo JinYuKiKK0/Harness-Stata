@@ -49,11 +49,12 @@ src/harness_stata/
 ├── graph.py         # 主图装配（仅 import nodes/）
 ├── config.py        # 配置
 ├── cli.py           # typer CLI 入口
-├── nodes/           # 8 个主图节点
-├── subgraphs/       # 数据探针子图工厂
-│   └── probe_subgraph.py  # build_probe_subgraph(tools, per_variable_max_calls)
+├── studio.py        # langgraph dev / Studio 入口
+├── nodes/           # 8 个主图节点 + _writes / _agent_runner helper
+├── subgraphs/
+│   └── probe/       # 数据探针子图：build_probe_subgraph 工厂 + 6 节点 colocation
 ├── prompts/         # Markdown system prompts
-└── clients/         # 外部依赖统一入口（csmar / stata / llm）
+└── clients/         # 外部依赖统一入口（csmar / stata / llm / mcp helper）
 
 csmar-mcp/          # CSMAR 数据获取 MCP submodule
 stata-executor/     # Stata 执行 MCP submodule
@@ -89,11 +90,15 @@ CSMAR_PASSWORD=     # CSMAR密码
 STATA_EXECUTOR_STATA_EXECUTABLE='C:/Program Files/Stata17/StataMP-64.exe'   Stata执行程序路径
 选填
 STATA_EXECUTOR_EDITION=mp   # Stata版本
+LANGSMITH_TRACING=false   # 设为 true 时启用 LangSmith tracing；启用时必须配 LANGSMITH_API_KEY
 LANGSMITH_API_KEY=   # LangSmith key
-LLM_MODEL=      # 模型编号 
-LLM_TEMPERATURE=0.5     # 模型温度
+LANGSMITH_PROJECT=harness-stata   # LangSmith 项目名
+LLM_MODEL=      # 模型编号
+LLM_TEMPERATURE=0.3     # 模型温度
 HARNESS_DOWNLOADS_ROOT=/downloads   # CSMAR数据下载解压路径
-HARNESS_PER_VARIABLE_MAX_CALLS=6    # 单个变量CSMAR api最大调用次数，避免Agent无限调用触发账号日限流
+HARNESS_PLANNING_AGENT_MAX_CALLS=8   # 探针 Planning Agent 一轮内的工具调用上限
+HARNESS_FALLBACK_REACT_MAX_CALLS=4   # 探针单变量 Fallback ReAct 的工具调用上限
+HARNESS_CLEANING_COVERAGE_THRESHOLD=0.8   # 数据清洗后变量非空率阈值（低于此值进 warnings）
 
 ```
 
@@ -106,7 +111,7 @@ HARNESS_PER_VARIABLE_MAX_CALLS=6    # 单个变量CSMAR api最大调用次数，
 uv run scripts/check.py
 ```
 
-一次跑完 pytest、ruff、pyright、import-linter、custom-lint。
+一次跑完 pytest、ruff lint、ruff format、pyright、import-linter、custom-lint（共 6 项）。
 
 
 ### 4. 连接 LangSmith Studio
@@ -122,6 +127,6 @@ uv run langgraph dev
 ## 开发约定
 
 - 会话开始：运行 `scripts/init.py` 摸清现状，从 `specs/feature_list.json` 选择 `passes:false` 且依赖全绿的 feature。
-- 会话结束：`scripts/check.py` 5/5 全过后翻转 `passes`，更新 `specs/PROGRESS.md`，提交 git。
+- 会话结束：`scripts/check.py` 6/6 全过后翻转 `passes`，更新 `specs/PROGRESS.md`，提交 git。
 - Feature 的结构性变更（id/description/steps/depends_on）需用户确认；`passes` 翻转无需确认。
 - 详见 [`CLAUDE.md`](CLAUDE.md)。

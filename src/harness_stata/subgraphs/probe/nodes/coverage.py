@@ -12,6 +12,7 @@ from typing import Any
 
 from langchain_core.tools import BaseTool
 
+from harness_stata.clients.mcp import call_structured_mcp_tool
 from harness_stata.subgraphs.probe.config import ProbeNodeConfig
 from harness_stata.subgraphs.probe.pure import (
     CoverageEntry,
@@ -105,7 +106,7 @@ async def run_probe_coverage(
     上游 coverage_validation_handler 据此走 hard/soft 路由,不再抛 RuntimeError。
     """
     try:
-        raw = await probe_tool.ainvoke(payload)
+        raw = await call_structured_mcp_tool(probe_tool, payload, context)
     except Exception as exc:
         return CoverageOutcome(
             can_materialize=False,
