@@ -11,7 +11,7 @@ from harness_stata.state import UserRequest
 
 
 _DUMMY_ENV: dict[str, str] = {
-    "DASHSCOPE_API_KEY": "test-dummy-key-not-real",
+    "LLM_API_KEY": "test-dummy-key-not-real",
     "LLM_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "CSMAR_ACCOUNT": "test-dummy-account",
     "CSMAR_PASSWORD": "test-dummy-password",
