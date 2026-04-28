@@ -31,7 +31,6 @@ class Settings:
     downloads_root: Path
     planning_agent_max_calls: int
     fallback_react_max_calls: int
-    substitute_max_rounds: int
     cleaning_coverage_threshold: float
     langsmith_tracing: bool
     langsmith_api_key: str | None
@@ -53,19 +52,6 @@ def _parse_positive_int(env: dict[str, str], key: str, *, default: str) -> int:
         raise RuntimeError(msg) from exc
     if value < 1:
         msg = f"{key}={value} 必须 >= 1。"
-        raise RuntimeError(msg)
-    return value
-
-
-def _parse_non_negative_int(env: dict[str, str], key: str, *, default: str) -> int:
-    raw = env.get(key, default)
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        msg = f"{key}={raw!r} 必须是整数。请在项目根 .env 中修正取值。"
-        raise RuntimeError(msg) from exc
-    if value < 0:
-        msg = f"{key}={value} 必须 >= 0。"
         raise RuntimeError(msg)
     return value
 
@@ -110,9 +96,6 @@ def get_settings() -> Settings:
     fallback_react_max_calls = _parse_positive_int(
         env, "HARNESS_FALLBACK_REACT_MAX_CALLS", default="4"
     )
-    substitute_max_rounds = _parse_non_negative_int(
-        env, "HARNESS_SUBSTITUTE_MAX_ROUNDS", default="1"
-    )
 
     coverage_raw = env.get("HARNESS_CLEANING_COVERAGE_THRESHOLD", "0.8")
     try:
@@ -155,7 +138,6 @@ def get_settings() -> Settings:
         downloads_root=downloads_root,
         planning_agent_max_calls=planning_agent_max_calls,
         fallback_react_max_calls=fallback_react_max_calls,
-        substitute_max_rounds=substitute_max_rounds,
         cleaning_coverage_threshold=cleaning_coverage_threshold,
         langsmith_tracing=langsmith_tracing,
         langsmith_api_key=langsmith_api_key,

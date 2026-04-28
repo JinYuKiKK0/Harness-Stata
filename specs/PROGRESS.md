@@ -2,24 +2,26 @@
 
 ## 当前焦点
 
-data_probe 子图 prompt/工具暴露收紧:移除 search_field、删除 bulk_search_phase 预筛。
+data_probe 子图弃用 SOFT 替代变量机制:soft 找不到直接记 not_found,不再尝试 substitute 重试。
 
 ## 当前上下文
 
 <!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
-- 本次会话 — 基于 LangSmith trace 排查 data_probe 死循环 + 浪费工具预算的根因,完成第一阶段修复:
-  - 根因 1:`csmar_search_field` 是 field_code/table_code 子串匹配,对中文经济变量名("总资产收益率"等)永不命中;Planning/Fallback prompt 把它包装成"零成本/首选",诱导 LLM 反复重试直到耗尽 `planning_agent_max_calls` / `fallback_react_max_calls`。
-  - 根因 2:`bulk_search_phase` 用变量名做精确匹配,但 CSMAR 财务库字段是 `F0xxxxx` 代码,bulk_search 几乎永远返回空 misses,只是空跑一次工具调用。
-  - 修复 — 工具暴露收紧:`PLANNING_TOOLS` = `{csmar_list_tables}`,`FALLBACK_TOOLS` = `{csmar_list_tables, csmar_bulk_schema, csmar_get_table_schema}`;`csmar_search_field` 完全不再暴露给任何 Agent。
-  - 修复 — 子图拓扑从 7 节点降为 6 节点:删除 `bulk_search_phase`,轮次初始化逻辑(首轮 vs substitute)合入 `planning_agent` 入口;substitute 重试回边目标改为 `planning_agent`。
-  - 修复 — 删除 `_probe_pipeline.bulk_search_unhit` / `_search_one`;`ProbeNodeConfig.search_tool` 字段移除;`build_probe_subgraph` 不再校验 search_tool 存在。
-  - 修复 — Prompt 同步:`data_probe_planning.md` 删除 search_field 工具行与预算提示;`data_probe_fallback.md` 改为"list_tables → bulk_schema → 按 field_label 匹配"的两步路径,明确利用 csmar-mcp 已新增的 `field_label`/`role_tags` 字段做语义匹配。
-  - 测试同步:`tests/subgraphs/test_probe_subgraph.py` 删除 `must_include_search_field` 断言,默认参数改为 `[csmar_list_tables]`;`tests/subgraphs/test_probe_helpers.py` 删除 `TestBulkSearchUnhit` 测试类;`tests/nodes/test_data_probe.py` 白名单断言更新。
-  - 文档同步:`docs/empirical-analysis-workflow.md` 探针子图段落 7 节点 → 6 节点,工具暴露策略段落同步删除 search_field 引用。
+- 本次会话 — 显式弃用 SOFT 替代变量机制,把 data_probe 子图回到一次性单向流水线:
+  - 决策动因:替代变量链路对 LLM 输出与 spec/plan 改写的耦合过深(verification + coverage 两处入口、跨阶段 sub_meta 维护、二次 planning agent 重跑、回写 EmpiricalSpec / ModelPlan),实跑收益远低于复杂度成本。
+  - 状态 schema:删除 `SubstitutionTrace`、`VariableProbeResult.substitution_trace`、`VariableProbeResult.status` 中的 `"substituted"` literal。
+  - 子图:`ProbeState` 移除 `substitute_meta`/`substitute_queue`/`substitute_round`/`pipeline_initialized`;`build_probe_subgraph` 移除 `substitute_max_rounds` 参数;`coverage_validation_handler` 后无重试回边,直接 END。
+  - Helper:删除 `SubstituteMeta`、`maybe_build_substitute`、`build_substituted_result`、`replace_variable_in_spec`、`replace_variable_in_model_plan`、`_replace_token`、`PendingValidation.is_substitute_task`、`VariableProbeFindingModel.candidate_substitute_*` 三字段、`BucketVariableFinding.candidate_substitute_*` 三字段、`_build_not_found_with_substitute`。
+  - 节点:`verification_phase` / `fallback_react_phase` SOFT not_found → 直接 `build_not_found_result`;`coverage_validation_handler` SOFT 失败 → 直接 `build_not_found_result`;通过分支不再回写 spec/plan。
+  - 配置:`Settings.substitute_max_rounds` + `_parse_non_negative_int` helper 删除;`.env` 删除 `HARNESS_SUBSTITUTE_MAX_ROUNDS=1`。
+  - data_probe 节点:`DataProbeOutput` 移除 `empirical_spec`/`model_plan` 字段;不再回写。
+  - Prompt:`data_probe_verification.md` 删除「Substitute 候选」「跨频率替代禁令」两段;`data_probe_fallback.md` 删除「Substitute 候选」段(按用户要求只删除不补反向防御文案,schema 删字段已构成完整防御)。
+  - HITL:`hitl.py` 删除 `_format_substitution_trace` 函数与 `_SECTION_HEADERS["substitution"]` 条目。
+  - 文档:`docs/state.md`、`docs/empirical-analysis-workflow.md` 同步;`docs/data_probe.md` JSON 快照清理。
+  - 测试:`tests/subgraphs/test_probe_subgraph.py` 删除 `test_negative_substitute_rounds_rejected`;`tests/subgraphs/test_probe_helpers.py` 删除两个 substitute 用例;`tests/nodes/conftest.py` `make_probe_report` 移除 `substituted` 参数;`tests/nodes/test_hitl.py` 合并替代相关用例;`tests/test_cli.py` 移除 `substitution_trace` 键。
   - `uv run scripts/check.py` 6/6 通过。
-  - 仍未做(留作下一轮):方案 B(verify field_label 在 verification prompt 里渲染正确),方案 C(用 `role_tags` 由代码层直接确定 key_fields,免 LLM 猜)。
-  - 仍未验证:LangSmith 实跑确认 data_probe 死循环已消失。
+  - 仍未验证:LangSmith / CLI 端到端确认子图行为(planning_agent 只跑一轮)。
 
 ## 下一步
 

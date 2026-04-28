@@ -46,19 +46,11 @@ class VariableSource(TypedDict):
     field: str
 
 
-class SubstitutionTrace(TypedDict):
-    original: str
-    reason: str
-    substitute: str
-    substitute_description: str
-
-
 class VariableProbeResult(TypedDict):
     variable_name: str
-    status: Literal["found", "substituted", "not_found"]
+    status: Literal["found", "not_found"]
     source: VariableSource | None
     record_count: int | None
-    substitution_trace: SubstitutionTrace | None
 
 
 class DownloadTask(TypedDict):

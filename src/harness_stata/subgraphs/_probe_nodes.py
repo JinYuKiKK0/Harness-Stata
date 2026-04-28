@@ -23,12 +23,10 @@ from harness_stata.clients.llm import get_chat_model
 from harness_stata.state import VariableDefinition
 from harness_stata.subgraphs._probe_helpers import (
     PendingValidation,
-    SubstituteMeta,
     VariableProbeFindingModel,
     build_not_found_result,
     ensure_manifest,
     ensure_report,
-    maybe_build_substitute,
 )
 from harness_stata.subgraphs._probe_pipeline import (
     VERIFICATION_OUTPUT_SPEC,
@@ -67,27 +65,18 @@ class ProbeNodeConfig:
 
 
 async def planning_agent(state: ProbeState, cfg: ProbeNodeConfig) -> dict[str, Any]:
-    """Plan candidate tables; also performs round bookkeeping at entry.
+    """Plan candidate tables for every variable in the empirical spec.
 
-    首轮(``pipeline_initialized`` 未置位):从 ``empirical_spec.variables`` 取队列。
-    后续 substitute 重试:从 ``substitute_queue`` 取队列,``substitute_round`` 自增。
-    队列空 → 直接返回 shaped report/manifest,路由层会落到 END。
+    队列为 ``empirical_spec.variables``;空队列直接返回 shaped report/manifest,
+    路由层会落到 END。
     """
     spec = state["empirical_spec"]
-    if not state.get("pipeline_initialized"):
-        queue: list[VariableDefinition] = list(spec["variables"])
-        substitute_round = 0
-    else:
-        queue = list(state.get("substitute_queue") or [])
-        substitute_round = state.get("substitute_round", 0) + 1
+    queue: list[VariableDefinition] = list(spec["variables"])
 
     if not queue:
         return {
-            "pipeline_initialized": True,
-            "substitute_round": substitute_round,
             "pending_variables": [],
             "planning_queue": [],
-            "substitute_queue": [],
             "plans": [],
             "schema_dict": {},
             "pending_hard_fallbacks": [],
@@ -127,14 +116,11 @@ async def planning_agent(state: ProbeState, cfg: ProbeNodeConfig) -> dict[str, A
     planning = result.get("structured_response")
     plans: list[VariablePlan] = list(planning.plans) if isinstance(planning, PlanningOutput) else []
     return {
-        "pipeline_initialized": True,
-        "substitute_round": substitute_round,
         "pending_variables": queue,
         "planning_queue": queue,
         "plans": plans,
         "schema_dict": {},
         "pending_hard_fallbacks": [],
-        "substitute_queue": [],
         "messages": result.get("messages", []),
     }
 
@@ -184,7 +170,6 @@ async def verification_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[st
     planning_queue = list(state.get("planning_queue") or [])
     schema_dict = dict(state.get("schema_dict") or {})
     validation_queue = list(state.get("validation_queue") or [])
-    sub_meta = dict(state.get("substitute_meta") or {})
     report = ensure_report(state.get("probe_report"))
     manifest = ensure_manifest(state.get("download_manifest"))
 
@@ -194,7 +179,6 @@ async def verification_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[st
             "pending_hard_fallbacks": [],
             "probe_report": report,
             "download_manifest": manifest,
-            "substitute_meta": sub_meta,
         }
 
     variables_by_name = {v["name"]: v for v in planning_queue}
@@ -220,46 +204,22 @@ async def verification_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[st
     all_findings = merged + unplanned_findings
 
     pending_hard_fallbacks: list[VariableDefinition] = []
-    substitute_queue_now = list(state.get("substitute_queue") or [])
-    sub_queue_names = {v["name"] for v in substitute_queue_now}
 
     for var, finding in all_findings:
         if finding.status == "found":
-            validation_queue.append(
-                PendingValidation(
-                    variable=var,
-                    finding=finding,
-                    is_substitute_task=var["name"] in sub_meta,
-                )
-            )
+            validation_queue.append(PendingValidation(variable=var, finding=finding))
             continue
         if var["contract_type"] == "hard":
             pending_hard_fallbacks.append(var)
             continue
-        # soft not_found
-        if var["name"] in sub_meta:
-            # 上一轮的 substitute,本轮再 not_found → 终止链路,记原变量名
-            meta = sub_meta.pop(var["name"])
-            report["variable_results"].append(build_not_found_result(meta["original_name"]))
-            continue
-        cand = maybe_build_substitute(finding, var)
-        if cand is None or cand["name"] in sub_queue_names:
-            report["variable_results"].append(build_not_found_result(var["name"]))
-            continue
-        substitute_queue_now.append(cand)
-        sub_queue_names.add(cand["name"])
-        sub_meta[cand["name"]] = SubstituteMeta(
-            original_name=var["name"],
-            reason=finding.candidate_substitute_reason or "",
-        )
+        # soft not_found → 直接记录
+        report["variable_results"].append(build_not_found_result(var["name"]))
 
     return {
         "validation_queue": validation_queue,
         "pending_hard_fallbacks": pending_hard_fallbacks,
         "probe_report": report,
         "download_manifest": manifest,
-        "substitute_meta": sub_meta,
-        "substitute_queue": substitute_queue_now,
     }
 
 
@@ -315,7 +275,6 @@ async def fallback_react_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[
     validation_queue = list(state.get("validation_queue") or [])
     report = ensure_report(state.get("probe_report"))
     manifest = ensure_manifest(state.get("download_manifest"))
-    sub_meta = dict(state.get("substitute_meta") or {})
 
     for var in fallbacks:
         human = HumanMessage(
@@ -346,13 +305,7 @@ async def fallback_react_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[
             finding = VariableProbeFindingModel(status="not_found")
 
         if finding.status == "found":
-            validation_queue.append(
-                PendingValidation(
-                    variable=var,
-                    finding=finding,
-                    is_substitute_task=var["name"] in sub_meta,
-                )
-            )
+            validation_queue.append(PendingValidation(variable=var, finding=finding))
             continue
 
         # hard not_found 兜底 → 整体硬失败
@@ -366,7 +319,6 @@ async def fallback_react_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[
             "pending_hard_fallbacks": [],
             "probe_report": report,
             "download_manifest": manifest,
-            "substitute_meta": sub_meta,
             "workflow_status": "failed_hard_contract",
         }
 
@@ -375,5 +327,4 @@ async def fallback_react_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[
         "pending_hard_fallbacks": [],
         "probe_report": report,
         "download_manifest": manifest,
-        "substitute_meta": sub_meta,
     }

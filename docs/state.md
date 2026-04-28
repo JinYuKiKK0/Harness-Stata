@@ -10,7 +10,7 @@
 
 | 子图       | 从主图读入                              | 写回主图                                                                                   | 子图内部（不泄漏）                                                                   |
 | ---------- | --------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| 数据探针   | EmpiricalSpec, ModelPlan                | ProbeReport, DownloadManifest, EmpiricalSpec/ModelPlan\*(Soft 替代时回写), workflow_status\*(hard_failure 时) | variable_queue, current_variable, per_variable_call_count, messages, substitute_meta |
+| 数据探针   | EmpiricalSpec, ModelPlan                | ProbeReport, DownloadManifest, workflow_status\*(hard_failure 时)                          | variable_queue, current_variable, per_variable_call_count, messages                  |
 | 数据清洗   | EmpiricalSpec, DownloadedFiles          | MergedDataset                                                           | messages, iteration_count                                           |
 | 描述性统计 | EmpiricalSpec, ModelPlan, MergedDataset | DescStatsReport                                                         | messages, iteration_count                                           |
 | 基准回归   | ModelPlan, MergedDataset                | RegressionResult                                                        | messages, iteration_count                                           |
@@ -78,15 +78,6 @@
 | table    | str  | 表名       |
 | field    | str  | 字段名     |
 
-**SubstitutionTrace**
-
-| 字段                    | 类型 | 说明             |
-| ----------------------- | ---- | ---------------- |
-| original                | str  | 原始变量名       |
-| reason                  | str  | 替代原因         |
-| substitute              | str  | 替代变量名       |
-| substitute_description  | str  | 替代变量描述     |
-
 #### EmpiricalSpec
 
 由需求解析节点写入。
@@ -139,10 +130,9 @@
 | 字段               | 类型                                                                               | 说明          |
 | ------------------ | ---------------------------------------------------------------------------------- | ------------- |
 | variable_name      | str                                                                                | 变量名        |
-| status             | "found" \| "substituted" \| "not_found"                                            | 可得性状态    |
+| status             | "found" \| "not_found"                                                             | 可得性状态    |
 | source             | {database: str, table: str, field: str} \| None                                    | 数据来源定位  |
 | record_count       | int \| None                                                                        | 记录计数      |
-| substitution_trace | {original: str, reason: str, substitute: str, substitute_description: str} \| None | Soft 替代溯源 |
 
 #### DownloadManifest
 

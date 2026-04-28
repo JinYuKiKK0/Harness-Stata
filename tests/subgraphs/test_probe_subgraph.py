@@ -60,7 +60,6 @@ def _build_default(**overrides: Any) -> Any:
         "fallback_prompt": "f",
         "planning_agent_max_calls": 4,
         "fallback_react_max_calls": 2,
-        "substitute_max_rounds": 1,
     }
     kwargs.update(overrides)
     return build_probe_subgraph(**kwargs)
@@ -82,10 +81,6 @@ class TestInputValidation:
     def test_non_positive_fallback_budget_rejected(self) -> None:
         with pytest.raises(ValueError, match="fallback_react_max_calls must be >= 1"):
             _build_default(fallback_react_max_calls=0)
-
-    def test_negative_substitute_rounds_rejected(self) -> None:
-        with pytest.raises(ValueError, match="substitute_max_rounds must be >= 0"):
-            _build_default(substitute_max_rounds=-1)
 
 
 class TestEmptyVariablesContract:

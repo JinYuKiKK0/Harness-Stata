@@ -95,8 +95,6 @@ def _validate(state: WorkflowState) -> str | None:
 class DataProbeOutput(TypedDict, total=False):
     probe_report: ProbeReport
     download_manifest: DownloadManifest
-    empirical_spec: EmpiricalSpec
-    model_plan: ModelPlan
     workflow_status: Literal["failed_hard_contract"]
 
 
@@ -149,7 +147,6 @@ async def data_probe(state: WorkflowState) -> DataProbeOutput:
             fallback_prompt=load_prompt("data_probe_fallback"),
             planning_agent_max_calls=settings.planning_agent_max_calls,
             fallback_react_max_calls=settings.fallback_react_max_calls,
-            substitute_max_rounds=settings.substitute_max_rounds,
         )
         initial: ProbeState = {
             "empirical_spec": spec,
@@ -163,12 +160,6 @@ async def data_probe(state: WorkflowState) -> DataProbeOutput:
         "probe_report": final["probe_report"],
         "download_manifest": final["download_manifest"],
     }
-    final_spec = final.get("empirical_spec")
-    if final_spec is not None and final_spec is not spec:
-        result["empirical_spec"] = final_spec
-    final_plan = final.get("model_plan")
-    if final_plan is not None and final_plan is not model_plan:
-        result["model_plan"] = final_plan
     if final.get("workflow_status") == "failed_hard_contract":
         result["workflow_status"] = "failed_hard_contract"
     return result

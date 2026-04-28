@@ -3,7 +3,6 @@
 本模块只保留与 **单变量结果固化** 相关的纯逻辑:
 
 - 时间归一化与 download_manifest 的 filters 构造
-- 变量替换(EmpiricalSpec / ModelPlan 同步改写)
 - 单变量探测的结构化输出 schema (:class:`VariableProbeFindingModel`)
 - ProbeReport / DownloadManifest 的构造与合并 helper
 - probe_query (覆盖率验证)阶段的 payload 构造 / 响应解码 / 异步执行入口
@@ -22,13 +21,10 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from harness_stata.state import (
-    CoreHypothesis,
     DownloadManifest,
     DownloadTask,
     EmpiricalSpec,
-    ModelPlan,
     ProbeReport,
-    SubstitutionTrace,
     VariableDefinition,
     VariableProbeResult,
     VariableSource,
@@ -42,8 +38,6 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _YEAR_MONTH_RE = re.compile(r"^(\d{4})-(\d{1,2})$")
 _YEAR_RE = re.compile(r"^\d{4}$")
 _QUARTER_RE = re.compile(r"^(\d{4})Q([1-4])$", re.IGNORECASE)
-_TOKEN_LEFT = r"(?<![A-Za-z0-9_])"
-_TOKEN_RIGHT = r"(?![A-Za-z0-9_])"
 
 
 def normalize_time_bound(value: str, *, is_start: bool) -> str:
@@ -84,58 +78,6 @@ def build_download_filters(
     return filters
 
 
-def replace_variable_in_spec(
-    spec: EmpiricalSpec, original_name: str, substitute: VariableDefinition
-) -> EmpiricalSpec:
-    new_vars: list[VariableDefinition] = [
-        substitute if v["name"] == original_name else v for v in spec["variables"]
-    ]
-    return EmpiricalSpec(
-        topic=spec["topic"],
-        variables=new_vars,
-        sample_scope=spec["sample_scope"],
-        time_range_start=spec["time_range_start"],
-        time_range_end=spec["time_range_end"],
-        data_frequency=spec["data_frequency"],
-        analysis_granularity=spec["analysis_granularity"],
-    )
-
-
-def replace_variable_in_model_plan(
-    plan: ModelPlan,
-    variable_results: list[VariableProbeResult],
-) -> ModelPlan:
-    replacements: list[tuple[str, str]] = []
-    for result in variable_results:
-        trace = result["substitution_trace"]
-        if result["status"] == "substituted" and trace is not None:
-            replacements.append((trace["original"], trace["substitute"]))
-
-    if not replacements:
-        return plan
-
-    equation = plan["equation"]
-    requirements = list(plan["data_structure_requirements"])
-    hypothesis = CoreHypothesis(**plan["core_hypothesis"])
-    for original, substitute in replacements:
-        equation = _replace_token(equation, original, substitute)
-        requirements = [_replace_token(req, original, substitute) for req in requirements]
-        if hypothesis["variable_name"] == original:
-            hypothesis["variable_name"] = substitute
-
-    return ModelPlan(
-        model_type=plan["model_type"],
-        equation=equation,
-        core_hypothesis=hypothesis,
-        data_structure_requirements=requirements,
-    )
-
-
-def _replace_token(text: str, original_name: str, substitute_name: str) -> str:
-    pattern = re.compile(f"{_TOKEN_LEFT}{re.escape(original_name)}{_TOKEN_RIGHT}")
-    return pattern.sub(substitute_name, text)
-
-
 # ---------------------------------------------------------------------------
 # Structured-output schema (consumed by create_agent response_format)
 # ---------------------------------------------------------------------------
@@ -144,9 +86,6 @@ OUTPUT_SPEC = """你的探测结论必须直接按给定 schema 的字段填写,
 
 - status="found" 要求 database / table / field 三字段非空;key_fields 填写主键/时间键列名。
 - status="not_found" 时 source/key_fields/filters 保持 null 或空。
-- soft 变量若没找到,但你在探测中发现了合理的替代变量,填写
-  candidate_substitute_name / candidate_substitute_description / candidate_substitute_reason;
-  否则三者留空。hard 变量不要填 substitute 字段。
 - filters 不要写时间范围;运行时会从 EmpiricalSpec.time_range_start/end
   自动生成 start_date/end_date。若 CSMAR 需要额外样本筛选,只允许填写
   {"condition": "..."}。
@@ -173,22 +112,6 @@ class VariableProbeFindingModel(BaseModel):
     filters: dict[str, str] | None = Field(
         default=None, description="Confirmed time/sample filters keyed by column"
     )
-    candidate_substitute_name: str | None = Field(
-        default=None, description="Soft+not_found only: candidate substitute variable name"
-    )
-    candidate_substitute_description: str | None = Field(
-        default=None, description="Soft+not_found only: candidate substitute description"
-    )
-    candidate_substitute_reason: str | None = Field(
-        default=None, description="Soft+not_found only: why this substitute fits"
-    )
-
-
-class SubstituteMeta(TypedDict):
-    """Bookkeeping for a substitute task enqueued for soft+not_found."""
-
-    original_name: str
-    reason: str
 
 
 class PendingValidation(TypedDict):
@@ -196,7 +119,6 @@ class PendingValidation(TypedDict):
 
     variable: VariableDefinition
     finding: VariableProbeFindingModel
-    is_substitute_task: bool
 
 
 class CoverageOutcome(TypedDict):
@@ -266,33 +188,6 @@ def build_found_result(
             field=finding.field or "",
         ),
         record_count=rc,
-        substitution_trace=None,
-    )
-
-
-def build_substituted_result(
-    meta: SubstituteMeta,
-    sub_var: VariableDefinition,
-    finding: VariableProbeFindingModel,
-    *,
-    record_count: int | None = None,
-) -> VariableProbeResult:
-    rc = record_count if record_count is not None else finding.record_count
-    return VariableProbeResult(
-        variable_name=meta["original_name"],
-        status="substituted",
-        source=VariableSource(
-            database=finding.database or "",
-            table=finding.table or "",
-            field=finding.field or "",
-        ),
-        record_count=rc,
-        substitution_trace=SubstitutionTrace(
-            original=meta["original_name"],
-            reason=meta["reason"],
-            substitute=sub_var["name"],
-            substitute_description=sub_var["description"],
-        ),
     )
 
 
@@ -302,7 +197,6 @@ def build_not_found_result(variable_name: str) -> VariableProbeResult:
         status="not_found",
         source=None,
         record_count=None,
-        substitution_trace=None,
     )
 
 
@@ -342,19 +236,6 @@ def merge_into_manifest(
             variable_names=[var_name] if var_name else [],
             filters=filters_typed,
         )
-    )
-
-
-def maybe_build_substitute(
-    finding: VariableProbeFindingModel, current: VariableDefinition
-) -> VariableDefinition | None:
-    if not (finding.candidate_substitute_name and finding.candidate_substitute_description):
-        return None
-    return VariableDefinition(
-        name=finding.candidate_substitute_name,
-        description=finding.candidate_substitute_description,
-        contract_type="soft",
-        role=current["role"],
     )
 
 

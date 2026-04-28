@@ -80,7 +80,6 @@ def patch_nodes(mocker: Any) -> Callable[..., None]:
                     "status": "found",
                     "source": {"database": "CSMAR", "table": "T", "field": "F"},
                     "record_count": 100,
-                    "substitution_trace": None,
                 }
             ],
             "overall_status": probe_overall,

@@ -34,35 +34,18 @@ def test_format_plan_full(
 ) -> None:
     spec = make_empirical_spec()
     plan = make_model_plan()
-    report = make_probe_report(substituted=True)
+    report = make_probe_report()
 
     text = _format_plan(spec, plan, report)
 
-    assert _SECTION_HEADERS["substitution"] in text
     assert "Hard" in text and "Soft" in text
     # all three variables appear as rows in the variables table
     for var in spec["variables"]:
         assert var["name"] in text
-    # substitution trace for SIZE is surfaced
-    assert "SIZE_RAW -> SIZE" in text
     # equation and hypothesis present
     assert plan["equation"] in text
     assert plan["core_hypothesis"]["rationale"] in text
-
-
-def test_format_plan_no_substitution(
-    make_empirical_spec: Callable[..., EmpiricalSpec],
-    make_model_plan: Callable[..., ModelPlan],
-    make_probe_report: Callable[..., ProbeReport],
-) -> None:
-    spec = make_empirical_spec()
-    plan = make_model_plan()
-    report = make_probe_report(substituted=False)
-
-    text = _format_plan(spec, plan, report)
-
-    assert _SECTION_HEADERS["substitution"] not in text
-    # other sections still present
+    # core sections present
     assert _SECTION_HEADERS["variables"] in text
     assert _SECTION_HEADERS["hypothesis"] in text
 

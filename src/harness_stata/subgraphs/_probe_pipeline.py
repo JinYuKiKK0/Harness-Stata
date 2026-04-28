@@ -5,7 +5,7 @@
 - Planning Agent / Verification 单桶的结构化输出 schema 与 prompt 输出规约
 - ``csmar_bulk_schema`` 响应解码
 - ``(variable, candidate_table)`` 笛卡尔展开 / 分桶
-- 多桶 verification 输出合并(任一 found / substitute 兜底)
+- 多桶 verification 输出合并(任一 found,否则 not_found)
 - prompt 用 schema 块格式化
 
 所有依赖 :class:`VariableProbeFindingModel` 等公共 schema 的入口都从
@@ -44,8 +44,6 @@ VERIFICATION_OUTPUT_SPEC = """你的输出必须严格按 BucketVerificationOutp
 - field 必须**严格出自给定 schema 的 field_name**,绝不能创造 schema 之外的列名。
 - key_fields 同样从 schema 中挑选,通常是主键 + 时间键。
 - filters 不要写时间范围,只在 CSMAR 需要额外样本筛选时填 {"condition": "..."}。
-- substitute 候选只在 status="not_found" + 该变量是 soft 契约时才允许填写;
-  hard 变量绝对不要填 substitute 字段。
 - 不要输出 database / table — 由代码层从 bucket key 回填。
 """
 
@@ -77,9 +75,6 @@ class BucketVariableFinding(BaseModel):
     field: str | None = None
     key_fields: list[str] | None = None
     filters: dict[str, str] | None = None
-    candidate_substitute_name: str | None = None
-    candidate_substitute_description: str | None = None
-    candidate_substitute_reason: str | None = None
 
 
 class BucketVerificationOutput(BaseModel):
@@ -207,8 +202,7 @@ def merge_bucket_results(
 
     优先级:
     1. 任一桶判定 found(且 field 在该桶 schema 中存在)→ 取第一个有效 found
-    2. 全部 not_found → 取首个携带 substitute 候选的桶,合成 not_found+substitute
-    3. 否则 → 纯 not_found
+    2. 否则 → 纯 not_found
     """
     by_var_name = {v["name"]: v for v in planned_variables}
     per_var_findings: dict[str, list[tuple[BucketKey, BucketVariableFinding]]] = {
@@ -227,7 +221,7 @@ def merge_bucket_results(
         if chosen_found is not None:
             results.append((var, chosen_found))
             continue
-        results.append((var, _build_not_found_with_substitute(bucket_findings, var)))
+        results.append((var, VariableProbeFindingModel(status="not_found")))
     return results
 
 
@@ -253,19 +247,3 @@ def _pick_first_valid_found(
             filters=dict(finding.filters or {}) or None,
         )
     return None
-
-
-def _build_not_found_with_substitute(
-    bucket_findings: list[tuple[BucketKey, BucketVariableFinding]],
-    var: VariableDefinition,
-) -> VariableProbeFindingModel:
-    if var["contract_type"] == "soft":
-        for _, finding in bucket_findings:
-            if finding.candidate_substitute_name and finding.candidate_substitute_description:
-                return VariableProbeFindingModel(
-                    status="not_found",
-                    candidate_substitute_name=finding.candidate_substitute_name,
-                    candidate_substitute_description=finding.candidate_substitute_description,
-                    candidate_substitute_reason=finding.candidate_substitute_reason,
-                )
-    return VariableProbeFindingModel(status="not_found")

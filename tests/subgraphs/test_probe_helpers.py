@@ -5,7 +5,7 @@ Coverage scope follows CLAUDE.md test conventions:
 - 时间归一化与 probe_query 响应解码(纯逻辑,无 LLM)
 - bulk_schema 响应解码与失败 table 提取
 - (variable, candidate_table) 笛卡尔展开与分桶
-- 多桶 verification 输出合并(任一 found / substitute 兜底)
+- 多桶 verification 输出合并(任一 found,否则 not_found)
 """
 
 from __future__ import annotations
@@ -286,52 +286,6 @@ class TestMergeBucketResults:
         ]
         results = merge_bucket_results(bucket_outputs, [roa], schema_dict)
         assert results[0][1].status == "not_found"
-
-    def test_substitute_only_for_soft(self) -> None:
-        size = _var("SIZE", contract="soft")
-        schema_dict = {"T1": [{"field_name": "Stkcd"}]}
-        bucket_outputs = [
-            (
-                BucketKey("DB", "T1"),
-                BucketVerificationOutput(
-                    results=[
-                        BucketVariableFinding(
-                            variable_name="SIZE",
-                            status="not_found",
-                            candidate_substitute_name="ASSETS",
-                            candidate_substitute_description="总资产",
-                            candidate_substitute_reason="代理 SIZE",
-                        )
-                    ]
-                ),
-            )
-        ]
-        results = merge_bucket_results(bucket_outputs, [size], schema_dict)
-        assert results[0][1].status == "not_found"
-        assert results[0][1].candidate_substitute_name == "ASSETS"
-
-    def test_substitute_ignored_for_hard(self) -> None:
-        roa = _var("ROA", contract="hard")
-        bucket_outputs = [
-            (
-                BucketKey("DB", "T1"),
-                BucketVerificationOutput(
-                    results=[
-                        BucketVariableFinding(
-                            variable_name="ROA",
-                            status="not_found",
-                            candidate_substitute_name="ROA_PROXY",
-                            candidate_substitute_description="d",
-                            candidate_substitute_reason="r",
-                        )
-                    ]
-                ),
-            )
-        ]
-        results = merge_bucket_results(bucket_outputs, [roa], {})
-        assert results[0][1].status == "not_found"
-        assert results[0][1].candidate_substitute_name is None
-
 
 # ---------------------------------------------------------------------------
 # format_schema_for_prompt

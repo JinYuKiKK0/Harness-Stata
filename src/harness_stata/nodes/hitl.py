@@ -1,11 +1,11 @@
 """HITL node — fourth node in the workflow.
 
 Pure-code node. Uses ``langgraph.types.interrupt`` to pause graph execution
-and surface the complete research plan (variables, equation, substitution
-trace, expected sign baseline, sample size estimate) to the caller,
-collects the user's approve/reject decision via ``Command(resume=...)``,
-and writes ``hitl_decision`` (plus ``workflow_status`` when rejected) to
-drive the conditional edge after HITL defined in
+and surface the complete research plan (variables, equation, expected sign
+baseline, sample size estimate) to the caller, collects the user's
+approve/reject decision via ``Command(resume=...)``, and writes
+``hitl_decision`` (plus ``workflow_status`` when rejected) to drive the
+conditional edge after HITL defined in
 docs/empirical-analysis-workflow.md.
 """
 
@@ -37,7 +37,6 @@ _SECTION_HEADERS: dict[str, str] = {
     "sample": "## 样本与时间范围",
     "equation": "## 模型方程",
     "variables": "## 变量定义表",
-    "substitution": "## Soft 替代溯源",
     "hypothesis": "## 预期符号基准线",
     "sample_size": "## 样本规模预估",
 }
@@ -113,25 +112,6 @@ def _format_variables_table(
     return "\n".join(lines)
 
 
-def _format_substitution_trace(report: ProbeReport) -> str:
-    substituted = [
-        r
-        for r in report["variable_results"]
-        if r["status"] == "substituted" and r["substitution_trace"] is not None
-    ]
-    if not substituted:
-        return ""
-    lines: list[str] = [_SECTION_HEADERS["substitution"], ""]
-    for r in substituted:
-        trace = r["substitution_trace"]
-        assert trace is not None  # narrow for pyright; filter above guarantees
-        lines.append(
-            f"- {trace['original']} -> {trace['substitute']} "
-            f"({trace['substitute_description']}): {trace['reason']}"
-        )
-    return "\n".join(lines)
-
-
 def _format_core_hypothesis(plan: ModelPlan) -> str:
     hyp = plan["core_hypothesis"]
     return (
@@ -166,7 +146,6 @@ def _format_plan(
         _format_sample_section(spec),
         _format_equation_section(plan),
         _format_variables_table(spec["variables"], report),
-        _format_substitution_trace(report),
         _format_core_hypothesis(plan),
         _format_sample_size(report),
     ]

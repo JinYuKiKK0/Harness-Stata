@@ -7,7 +7,7 @@
 
 | 工具 | 用法 | 备注 |
 | --- | --- | --- |
-| `csmar_list_tables` | 给定数据库名,列出该库下所有 (table_code, table_name) | 远程调用但有缓存;**candidate_table_codes 必须出自本工具返回结果**,严禁盲猜 |
+| `csmar_list_tables` | 给定数据库名,列出该库下所有 (table_code, table_name) | ;**candidate_table_codes 必须出自本工具返回结果**,严禁盲猜 |
 
 ## 推荐流程
 

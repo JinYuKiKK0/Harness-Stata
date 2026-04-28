@@ -14,7 +14,6 @@ from harness_stata.state import (
     EmpiricalSpec,
     ModelPlan,
     ProbeReport,
-    SubstitutionTrace,
     VariableDefinition,
     VariableProbeResult,
     VariableSource,
@@ -96,9 +95,6 @@ def make_probe_report() -> Callable[..., ProbeReport]:
     """Factory building :class:`ProbeReport`.
 
     Args:
-        substituted: If True, the control variable (SIZE) is marked substituted
-            with a :class:`SubstitutionTrace`; otherwise all three variables are
-            "found".
         missing_counts: If True, every ``record_count`` is ``None``.
     """
 
@@ -106,7 +102,6 @@ def make_probe_report() -> Callable[..., ProbeReport]:
         return {"database": "CSMAR", "table": table, "field": field}
 
     def _make(
-        substituted: bool = False,
         missing_counts: bool = False,
         **overrides: Any,
     ) -> ProbeReport:
@@ -116,42 +111,20 @@ def make_probe_report() -> Callable[..., ProbeReport]:
                 "status": "found",
                 "source": _default_source("FS_COMINS", "ROA"),
                 "record_count": None if missing_counts else 38000,
-                "substitution_trace": None,
             },
             {
                 "variable_name": "DIGITAL",
                 "status": "found",
                 "source": _default_source("DIG_TRANSFORM", "DIG_INDEX"),
                 "record_count": None if missing_counts else 35000,
-                "substitution_trace": None,
+            },
+            {
+                "variable_name": "SIZE",
+                "status": "found",
+                "source": _default_source("FS_COMBAS", "A001000000"),
+                "record_count": None if missing_counts else 37000,
             },
         ]
-        if substituted:
-            trace: SubstitutionTrace = {
-                "original": "SIZE_RAW",
-                "reason": "CSMAR 未提供原始总资产字段",
-                "substitute": "SIZE",
-                "substitute_description": "总资产取对数",
-            }
-            results.append(
-                {
-                    "variable_name": "SIZE",
-                    "status": "substituted",
-                    "source": _default_source("FS_COMBAS", "A001000000"),
-                    "record_count": None if missing_counts else 37000,
-                    "substitution_trace": trace,
-                }
-            )
-        else:
-            results.append(
-                {
-                    "variable_name": "SIZE",
-                    "status": "found",
-                    "source": _default_source("FS_COMBAS", "A001000000"),
-                    "record_count": None if missing_counts else 37000,
-                    "substitution_trace": None,
-                }
-            )
         report: ProbeReport = {
             "variable_results": results,
             "overall_status": "success",

@@ -30,10 +30,6 @@
 - `record_count`: **留 null** — 行数由后续覆盖率验证以代码批量验证
 - `not_found` 时上述字段全部留 null/空
 
-## Substitute 候选
-
-本阶段仅处理 hard 变量,**不要**填 substitute 字段。
-
 ## 预算意识
 
 每个变量的工具调用次数有上限。最优路径是 `list_tables → bulk_schema → 判断字段`

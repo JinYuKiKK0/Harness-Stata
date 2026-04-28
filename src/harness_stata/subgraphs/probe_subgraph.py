@@ -1,4 +1,4 @@
-"""Probe subgraph factory — 批量字段发现流水线 + 覆盖率验证 + substitute 重试。
+"""Probe subgraph factory — 批量字段发现流水线 + 覆盖率验证。
 
 六节点拓扑::
 
@@ -12,13 +12,12 @@
         │  (pending_hard_fallbacks 非空)
         ▼
     fallback_react_phase
-        │
+        │  (hard_failure 时直接 END)
         ▼
     coverage_validator
         │
         ▼
-    coverage_validation_handler ─[substitute_queue 非空 AND round < max]→ 回到 planning_agent
-                                 ─[hard_failure / 完成]→ END
+    coverage_validation_handler ──→ END
 
 详见 ``docs/empirical-analysis-workflow.md``。本文件只承载:
 - :class:`ProbeState` 子图状态 schema
@@ -55,7 +54,6 @@ from harness_stata.subgraphs._probe_coverage import (
 from harness_stata.subgraphs._probe_helpers import (
     CoverageEntry,
     PendingValidation,
-    SubstituteMeta,
 )
 from harness_stata.subgraphs._probe_nodes import (
     ProbeNodeConfig,
@@ -84,10 +82,6 @@ class ProbeState(TypedDict, total=False):
     pending_hard_fallbacks: list[VariableDefinition]
     validation_queue: list[PendingValidation]
     coverage_outcomes: list[CoverageEntry]
-    substitute_meta: dict[str, SubstituteMeta]
-    substitute_queue: list[VariableDefinition]
-    substitute_round: int
-    pipeline_initialized: bool
     messages: list[BaseMessage]
 
 
@@ -102,7 +96,6 @@ def build_probe_subgraph(
     fallback_prompt: str,
     planning_agent_max_calls: int,
     fallback_react_max_calls: int,
-    substitute_max_rounds: int,
 ) -> CompiledStateGraph[ProbeState, ProbeState, ProbeState, ProbeState]:
     """Build a compiled probe subgraph wired to the given tools and prompts.
 
@@ -113,9 +106,7 @@ def build_probe_subgraph(
     ``probe_tool`` 仅在 coverage_validator 里使用,不绑给任何 Agent。
 
     ``planning_agent_max_calls`` 限制 Planning Agent 一轮内的工具调用次数,
-    ``fallback_react_max_calls`` 限制每个兜底单变量 ReAct 的预算,
-    ``substitute_max_rounds`` 限制 substitute 流水线的重试轮次(0 = 不允许 substitute
-    重试,1 = 允许 1 次,以此类推)。
+    ``fallback_react_max_calls`` 限制每个兜底单变量 ReAct 的预算。
     """
     if not planning_tools:
         raise ValueError("planning_tools must not be empty")
@@ -125,8 +116,6 @@ def build_probe_subgraph(
         raise ValueError("planning_agent_max_calls must be >= 1")
     if fallback_react_max_calls < 1:
         raise ValueError("fallback_react_max_calls must be >= 1")
-    if substitute_max_rounds < 0:
-        raise ValueError("substitute_max_rounds must be >= 0")
 
     cfg = ProbeNodeConfig(
         planning_tools=list(planning_tools),
@@ -166,19 +155,6 @@ def build_probe_subgraph(
             return "__end__"
         return "coverage_validator"
 
-    def _route_after_coverage_handler(
-        state: ProbeState,
-    ) -> Literal["planning_agent", "__end__"]:
-        report = state.get("probe_report")
-        if report is not None and report.get("overall_status") == "hard_failure":
-            return "__end__"
-        if (
-            state.get("substitute_queue")
-            and state.get("substitute_round", 0) < substitute_max_rounds
-        ):
-            return "planning_agent"
-        return "__end__"
-
     graph: StateGraph[ProbeState, ProbeState, ProbeState, ProbeState] = StateGraph(ProbeState)
     graph.add_node("planning_agent", partial(planning_agent, cfg=cfg))
     graph.add_node("bulk_schema_phase", partial(bulk_schema_phase, cfg=cfg))
@@ -211,9 +187,5 @@ def build_probe_subgraph(
         {"coverage_validator": "coverage_validator", END: END},
     )
     graph.add_edge("coverage_validator", "coverage_validation_handler")
-    graph.add_conditional_edges(
-        "coverage_validation_handler",
-        _route_after_coverage_handler,
-        {"planning_agent": "planning_agent", END: END},
-    )
+    graph.add_edge("coverage_validation_handler", END)
     return graph.compile()
