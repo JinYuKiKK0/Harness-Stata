@@ -20,7 +20,8 @@ from harness_stata.subgraphs.probe.state import ProbeState
 async def planning_agent(state: ProbeState, cfg: ProbeNodeConfig) -> dict[str, Any]:
     """Plan candidate tables for every variable in the empirical spec.
 
-    队列为 ``empirical_spec.variables``;空队列直接返回 shaped report/manifest,
+    队列即 ``empirical_spec.variables``,planning agent 不可丢弃/重排变量
+    (verification 阶段直接从 spec 取);空队列直接返回 shaped report/manifest,
     路由层会落到 END。
     """
     spec = state["empirical_spec"]
@@ -28,8 +29,6 @@ async def planning_agent(state: ProbeState, cfg: ProbeNodeConfig) -> dict[str, A
 
     if not queue:
         return {
-            "pending_variables": [],
-            "planning_queue": [],
             "plans": [],
             "schema_dict": {},
             "pending_hard_fallbacks": [],
@@ -69,10 +68,7 @@ async def planning_agent(state: ProbeState, cfg: ProbeNodeConfig) -> dict[str, A
     planning = result.get("structured_response")
     plans: list[VariablePlan] = list(planning.plans) if isinstance(planning, PlanningOutput) else []
     return {
-        "pending_variables": queue,
-        "planning_queue": queue,
         "plans": plans,
         "schema_dict": {},
         "pending_hard_fallbacks": [],
-        "messages": result.get("messages", []),
     }

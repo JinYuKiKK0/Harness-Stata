@@ -17,35 +17,24 @@ from harness_stata.nodes.data_probe import (
     PLANNING_TOOLS,
     data_probe,
 )
-from harness_stata.state import EmpiricalSpec, ModelPlan, WorkflowState
+from harness_stata.state import EmpiricalSpec, WorkflowState
 
 
 def _run(state: WorkflowState) -> dict[str, Any]:
     return asyncio.run(data_probe(state))
 
 
-def test_data_probe_missing_empirical_spec_raises(
-    make_model_plan: Callable[..., ModelPlan],
-) -> None:
-    state: WorkflowState = {"model_plan": make_model_plan()}
+def test_data_probe_missing_empirical_spec_raises() -> None:
+    state: WorkflowState = {}
     with pytest.raises(ValueError, match="empirical_spec"):
-        _run(state)
-
-
-def test_data_probe_missing_model_plan_raises(
-    make_empirical_spec: Callable[..., EmpiricalSpec],
-) -> None:
-    state: WorkflowState = {"empirical_spec": make_empirical_spec()}
-    with pytest.raises(ValueError, match="model_plan"):
         _run(state)
 
 
 def test_data_probe_empty_variables_raises(
     make_empirical_spec: Callable[..., EmpiricalSpec],
-    make_model_plan: Callable[..., ModelPlan],
 ) -> None:
     spec = make_empirical_spec(variables=[])
-    state: WorkflowState = {"empirical_spec": spec, "model_plan": make_model_plan()}
+    state: WorkflowState = {"empirical_spec": spec}
     with pytest.raises(ValueError, match="non-empty"):
         _run(state)
 

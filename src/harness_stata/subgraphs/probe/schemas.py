@@ -21,29 +21,25 @@ from pydantic import BaseModel, Field
 # LLM 输出规约 (供 config 层拼接进 system prompt)
 # ---------------------------------------------------------------------------
 
-PLANNING_OUTPUT_SPEC = """你的输出必须严格按 PlanningOutput schema 填写,不要输出自然语言。规则:
+PLANNING_OUTPUT_SPEC = """语义约束(schema 之外):
 
-- plans 必须为输入中**全部**待处理变量给出一条记录。
-- target_database 取自工具返回的已购数据库名,不要自行拼写或翻译。
-- candidate_table_codes 必须**完全来自 csmar_list_tables 工具返回的 table_code**,
-  禁止盲猜或缩写。一个变量可以给 1~N 张候选表(N 不要超过 3),按相关度从高到低排序。
+- candidate_table_codes 必须**完全来自 csmar_list_tables 返回的 table_code**,
+  禁止盲猜或缩写;一个变量给 1~3 张,按相关度从高到低排序。
 - 不要在本阶段判定字段是否存在 — 只负责"该变量大概率位于哪些表"。
-- 若你确实推断不出某变量的候选表,把 candidate_table_codes 留空 list 并照常输出该变量。
+- 推断不出候选表时,留空 list 并照常输出该变量。
 """
 
-VERIFICATION_OUTPUT_SPEC = """你的输出必须严格按 BucketVerificationOutput schema 填写。
-本桶对应一张表(database / table_code 已在 prompt 中给出),你的任务是判定本桶里
-每个变量是否能在给定 schema 中找到对应字段。规则:
+VERIFICATION_OUTPUT_SPEC = """语义约束(schema 之外):
 
-- results 必须为输入中**全部**变量给出一条记录,顺序保持一致。
-- field 必须**严格出自给定 schema 的 field_code**,绝不能创造 schema 之外的列名。
-- key_fields 同样从 schema 中挑选,通常是主键 + 时间键。
-- filters 不要写时间范围,只在 CSMAR 需要额外样本筛选时填 {"condition": "..."}。
+- field / key_fields 必须**严格出自给定 schema 的 field_code**,
+  绝不能创造 schema 之外的列名。
+- filters 不要写时间范围;仅在 CSMAR 需要额外样本筛选时填 {"condition": "..."}。
 - 不要输出 database / table — 由代码层从 bucket key 回填。
 """
 
-FALLBACK_OUTPUT_SPEC = """你的探测结论必须按 VariableProbeFindingModel schema 输出。
-status 只能是 found / not_found;found 时 database / table / field / key_fields 必填。
+FALLBACK_OUTPUT_SPEC = """语义约束(schema 之外):
+
+- found 时 database / table / field / key_fields 必填;不确定就返回 not_found。
 """
 
 
@@ -61,9 +57,6 @@ class VariableProbeFindingModel(BaseModel):
     database: str | None = Field(default=None, description="Source database name (found only)")
     table: str | None = Field(default=None, description="Source table name (found only)")
     field: str | None = Field(default=None, description="Variable column name (found only)")
-    record_count: int | None = Field(
-        default=None, description="Record count if reported by the agent"
-    )
     key_fields: list[str] | None = Field(
         default=None, description="Primary/time key columns for the source table"
     )

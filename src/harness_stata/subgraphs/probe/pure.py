@@ -9,8 +9,8 @@
 5. ``csmar_probe_query`` payload 构造与响应解码
 
 NamedTuple :class:`BucketKey` / :class:`BulkSchemaResult` 是分桶/解码函数的返回类型,
-TypedDict :class:`PendingValidation` / :class:`CoverageOutcome` / :class:`CoverageEntry`
-是节点间流转的桥接类型,本质都是 pure 函数的输入/返回类型,与 pure 函数 colocate 在本文件。
+TypedDict :class:`PendingValidation` / :class:`CoverageOutcome` 是节点间流转/解码的
+桥接类型,本质都是 pure 函数的输入/返回类型,与 pure 函数 colocate 在本文件。
 ``run_probe_coverage`` 含 await 调用,不属于纯逻辑,归
 :mod:`harness_stata.subgraphs.probe.nodes.coverage`。
 """
@@ -53,13 +53,6 @@ class CoverageOutcome(TypedDict):
     validation_id: str | None
     row_count: int | None
     failure_reason: str | None
-
-
-class CoverageEntry(TypedDict):
-    """Pairing of a pending validation with the probe outcome it produced."""
-
-    pending: PendingValidation
-    outcome: CoverageOutcome
 
 
 # ---------------------------------------------------------------------------
@@ -305,9 +298,8 @@ def build_found_result(
     var: VariableDefinition,
     finding: VariableProbeFindingModel,
     *,
-    record_count: int | None = None,
+    record_count: int | None,
 ) -> VariableProbeResult:
-    rc = record_count if record_count is not None else finding.record_count
     return VariableProbeResult(
         variable_name=var["name"],
         status="found",
@@ -316,7 +308,7 @@ def build_found_result(
             table=finding.table or "",
             field=finding.field or "",
         ),
-        record_count=rc,
+        record_count=record_count,
     )
 
 

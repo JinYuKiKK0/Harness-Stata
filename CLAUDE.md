@@ -56,7 +56,7 @@ harness-stata/
 │   │           ├── bulk_schema.py     # Phase 2: bulk_schema_phase
 │   │           ├── verification.py    # Phase 3: verification_phase
 │   │           ├── fallback.py        # Phase 4: fallback_react_phase
-│   │           └── coverage.py        # Phase 5/6: coverage_validator + handler
+│   │           └── coverage.py        # Phase 5: coverage_phase
 │   ├── prompts/                  # Markdown 格式 system prompt
 │   │   └── __init__.py           # 提供 load_prompt(name)
 │   └── clients/                  # 外部依赖统一入口（contextmanager 管理生命周期）

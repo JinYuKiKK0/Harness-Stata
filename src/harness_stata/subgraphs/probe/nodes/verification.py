@@ -28,13 +28,13 @@ from harness_stata.subgraphs.probe.state import ProbeState
 
 async def verification_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[str, Any]:
     plans = list(state.get("plans") or [])
-    planning_queue = list(state.get("planning_queue") or [])
+    variables = list(state["empirical_spec"]["variables"])
     schema_dict = dict(state.get("schema_dict") or {})
     validation_queue = list(state.get("validation_queue") or [])
     report = ensure_report(state.get("probe_report"))
     manifest = ensure_manifest(state.get("download_manifest"))
 
-    if not planning_queue:
+    if not variables:
         return {
             "validation_queue": validation_queue,
             "pending_hard_fallbacks": [],
@@ -43,10 +43,10 @@ async def verification_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[st
         }
 
     # 分桶
-    variables_by_name = {v["name"]: v for v in planning_queue}
+    variables_by_name = {v["name"]: v for v in variables}
     buckets, unplanned = bucket_plans(plans, variables_by_name, schema_dict)
 
-    # 兜住:planning_queue 里有但 plans 完全没列出的变量(planning agent 漏掉)
+    # 兜住:spec.variables 里有但 plans 完全没列出的变量(planning agent 漏掉)
     unplanned_names = {v["name"] for v in unplanned}
     planned_names = {plan.variable_name for plan in plans}
     for name, var in variables_by_name.items():
@@ -56,7 +56,7 @@ async def verification_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[st
 
     # 并发调LLM跑分桶
     bucket_outputs = await _run_verification_buckets(buckets, schema_dict, cfg)
-    merged = merge_bucket_results(bucket_outputs, planning_queue, schema_dict)
+    merged = merge_bucket_results(bucket_outputs, variables, schema_dict)
 
     merged_names = {v["name"] for v, _ in merged}
     unplanned_findings: list[tuple[VariableDefinition, VariableProbeFindingModel]] = [

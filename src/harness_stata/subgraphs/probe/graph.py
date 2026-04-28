@@ -1,9 +1,9 @@
 """Probe subgraph factory — 批量字段发现流水线 + 覆盖率验证。
 
-六节点拓扑::
+五节点拓扑::
 
     planning_agent
-        │  (planning_queue 非空)
+        │  (empirical_spec.variables 非空)
         ▼
     bulk_schema_phase
         │
@@ -14,10 +14,7 @@
     fallback_react_phase
         │  (hard_failure 时直接 END)
         ▼
-    coverage_validator
-        │
-        ▼
-    coverage_validation_handler ──→ END
+    coverage_phase ──→ END
 
 详见 ``docs/empirical-analysis-workflow.md``。本文件只承载路由函数与
 :func:`build_probe_subgraph` 工厂(组装 ``ProbeNodeConfig`` + 节点 partial 绑定 +
@@ -43,8 +40,7 @@ from harness_stata.subgraphs.probe.config import (
 )
 from harness_stata.subgraphs.probe.nodes import (
     bulk_schema_phase,
-    coverage_validation_handler,
-    coverage_validator,
+    coverage_phase,
     fallback_react_phase,
     planning_agent,
     verification_phase,
@@ -70,7 +66,7 @@ def build_probe_subgraph(
     ``csmar_list_tables``)。``fallback_tools`` 是兜底单变量 ReAct 可用的工具集
     (``csmar_list_tables`` + ``csmar_bulk_schema`` + ``csmar_get_table_schema``)。
     ``bulk_schema_tool`` 由代码层在中间环节批量调用,同时也作为 fallback Agent 工具;
-    ``probe_tool`` 仅在 coverage_validator 里使用,不绑给任何 Agent。
+    ``probe_tool`` 仅在 coverage_phase 里使用,不绑给任何 Agent。
 
     ``planning_agent_max_calls`` 限制 Planning Agent 一轮内的工具调用次数,
     ``fallback_react_max_calls`` 限制每个兜底单变量 ReAct 的预算。
@@ -99,32 +95,31 @@ def build_probe_subgraph(
     def _route_after_planning(
         state: ProbeState,
     ) -> Literal["bulk_schema_phase", "__end__"]:
-        if state.get("planning_queue"):
+        if state["empirical_spec"]["variables"]:
             return "bulk_schema_phase"
         return "__end__"
 
     def _route_after_verification(
         state: ProbeState,
-    ) -> Literal["fallback_react_phase", "coverage_validator"]:
+    ) -> Literal["fallback_react_phase", "coverage_phase"]:
         if state.get("pending_hard_fallbacks"):
             return "fallback_react_phase"
-        return "coverage_validator"
+        return "coverage_phase"
 
     def _route_after_fallback(
         state: ProbeState,
-    ) -> Literal["coverage_validator", "__end__"]:
+    ) -> Literal["coverage_phase", "__end__"]:
         report = state.get("probe_report")
         if report is not None and report.get("overall_status") == "hard_failure":
             return "__end__"
-        return "coverage_validator"
+        return "coverage_phase"
 
     graph: StateGraph[ProbeState, ProbeState, ProbeState, ProbeState] = StateGraph(ProbeState)
     graph.add_node("planning_agent", partial(planning_agent, cfg=cfg))
     graph.add_node("bulk_schema_phase", partial(bulk_schema_phase, cfg=cfg))
     graph.add_node("verification_phase", partial(verification_phase, cfg=cfg))
     graph.add_node("fallback_react_phase", partial(fallback_react_phase, cfg=cfg))
-    graph.add_node("coverage_validator", partial(coverage_validator, cfg=cfg))
-    graph.add_node("coverage_validation_handler", coverage_validation_handler)
+    graph.add_node("coverage_phase", partial(coverage_phase, cfg=cfg))
 
     graph.add_edge(START, "planning_agent")
     graph.add_conditional_edges(
@@ -142,14 +137,13 @@ def build_probe_subgraph(
         _route_after_verification,
         {
             "fallback_react_phase": "fallback_react_phase",
-            "coverage_validator": "coverage_validator",
+            "coverage_phase": "coverage_phase",
         },
     )
     graph.add_conditional_edges(
         "fallback_react_phase",
         _route_after_fallback,
-        {"coverage_validator": "coverage_validator", END: END},
+        {"coverage_phase": "coverage_phase", END: END},
     )
-    graph.add_edge("coverage_validator", "coverage_validation_handler")
-    graph.add_edge("coverage_validation_handler", END)
+    graph.add_edge("coverage_phase", END)
     return graph.compile()

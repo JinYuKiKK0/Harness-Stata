@@ -10,7 +10,7 @@
 
 | 子图       | 从主图读入                              | 写回主图                                                                                   | 子图内部（不泄漏）                                                                   |
 | ---------- | --------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| 数据探针   | EmpiricalSpec, ModelPlan                | ProbeReport, DownloadManifest, workflow_status\*(hard_failure 时)                          | available_databases, pending_variables, planning_queue, plans, schema_dict, pending_hard_fallbacks, validation_queue, coverage_outcomes, messages |
+| 数据探针   | EmpiricalSpec                           | ProbeReport, DownloadManifest, workflow_status\*(hard_failure 时)                          | available_databases, plans, schema_dict, pending_hard_fallbacks, validation_queue |
 | 数据清洗   | EmpiricalSpec, DownloadedFiles          | MergedDataset                                                           | messages（create_agent 内部 MessagesState，迭代上限由 ModelCallLimitMiddleware 计数） |
 | 描述性统计 | EmpiricalSpec, ModelPlan, MergedDataset | DescStatsReport                                                         | messages（create_agent 内部 MessagesState，迭代上限由 ModelCallLimitMiddleware 计数） |
 | 基准回归   | ModelPlan, MergedDataset                | RegressionResult                                                        | messages（create_agent 内部 MessagesState，迭代上限由 ModelCallLimitMiddleware 计数） |

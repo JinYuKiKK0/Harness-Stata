@@ -18,7 +18,6 @@ from harness_stata.prompts import load_prompt
 from harness_stata.state import (
     DownloadManifest,
     EmpiricalSpec,
-    ModelPlan,
     ProbeReport,
     WorkflowState,
 )
@@ -74,8 +73,6 @@ def _validate(state: WorkflowState) -> str | None:
         return "state.empirical_spec is missing"
     if not spec.get("variables"):
         return "empirical_spec.variables must be a non-empty list"
-    if state.get("model_plan") is None:
-        return "state.model_plan is missing"
     return None
 
 
@@ -97,7 +94,6 @@ async def data_probe(state: WorkflowState) -> DataProbeOutput:
         raise ValueError(err)
 
     spec: EmpiricalSpec = state["empirical_spec"]
-    model_plan: ModelPlan = state["model_plan"]
     settings = get_settings()
 
     async with get_csmar_tools() as tools:
@@ -142,7 +138,6 @@ async def data_probe(state: WorkflowState) -> DataProbeOutput:
         )
         initial: ProbeState = {
             "empirical_spec": spec,
-            "model_plan": model_plan,
             "available_databases": available_databases_text,
         }
         raw_final = await subgraph.ainvoke(initial)
