@@ -13,7 +13,6 @@ from typing import Any
 import pytest
 
 from harness_stata.nodes.data_probe import (
-    ALLOWED_REACT_TOOLS,
     FALLBACK_TOOLS,
     PLANNING_TOOLS,
     data_probe,
@@ -68,8 +67,6 @@ def test_data_probe_react_tool_whitelist_pinned() -> None:
             "csmar_get_table_schema",
         }
     )
-    # ALLOWED_REACT_TOOLS 保留为 FALLBACK_TOOLS 的别名,保证旧调用方契约
-    assert ALLOWED_REACT_TOOLS == FALLBACK_TOOLS
 
     forbidden = {
         "csmar_bulk_schema",

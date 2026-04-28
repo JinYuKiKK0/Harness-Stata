@@ -1,24 +1,25 @@
-"""Pure helpers for the CSMAR probe subgraph (报告/manifest/coverage 部分)。
+"""Pure helpers for the CSMAR probe subgraph (无 LangChain/LangGraph 依赖)。
 
-本模块只保留与 **单变量结果固化** 相关的纯逻辑:
+按 5 个 section 组织,全部为无副作用、无外部依赖的纯函数:
 
-- 时间归一化与 download_manifest 的 filters 构造
-- 单变量探测的结构化输出 schema (:class:`VariableProbeFindingModel`)
-- ProbeReport / DownloadManifest 的构造与合并 helper
-- probe_query (覆盖率验证)阶段的 payload 构造 / 响应解码 / 异步执行入口
+1. 时间归一化与 download_manifest filters 构造
+2. ``csmar_bulk_schema`` 响应解码 + prompt schema 块格式化
+3. (variable, candidate_table) 笛卡尔分桶 + 多桶 verification 输出合并
+4. ProbeReport / DownloadManifest 的构造与合并
+5. ``csmar_probe_query`` payload 构造与响应解码
 
-**批量字段发现流水线**(Planning Agent / Bulk Schema / Verification 分桶 / 桶级合并)
-独立放在 :mod:`harness_stata.subgraphs._probe_pipeline`,以保持每个文件聚焦单一职责。
+NamedTuple :class:`BucketKey` / :class:`BulkSchemaResult` 是分桶/解码函数的返回类型,
+TypedDict :class:`PendingValidation` / :class:`CoverageOutcome` / :class:`CoverageEntry`
+是节点间流转的桥接类型,本质都是 pure 函数的输入/返回类型,与 pure 函数 colocate 在本文件。
+``run_probe_coverage`` 含 await 调用,不属于纯逻辑,归
+:mod:`harness_stata.subgraphs.probe.nodes.coverage`。
 """
 
 from __future__ import annotations
 
 import calendar
 import re
-from typing import Literal, TypedDict
-
-from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field
+from typing import Any, NamedTuple, TypedDict
 
 from harness_stata.state import (
     DownloadManifest,
@@ -29,9 +30,40 @@ from harness_stata.state import (
     VariableProbeResult,
     VariableSource,
 )
+from harness_stata.subgraphs.probe.schemas import (
+    BucketVariableFinding,
+    BucketVerificationOutput,
+    VariablePlan,
+    VariableProbeFindingModel,
+)
+
+
+class PendingValidation(TypedDict):
+    """A field-level finding waiting for the coverage-validation phase."""
+
+    variable: VariableDefinition
+    finding: VariableProbeFindingModel
+
+
+class CoverageOutcome(TypedDict):
+    """Decoded result of a single ``csmar_probe_query`` call."""
+
+    can_materialize: bool
+    invalid_columns: list[str]
+    validation_id: str | None
+    row_count: int | None
+    failure_reason: str | None
+
+
+class CoverageEntry(TypedDict):
+    """Pairing of a pending validation with the probe outcome it produced."""
+
+    pending: PendingValidation
+    outcome: CoverageOutcome
+
 
 # ---------------------------------------------------------------------------
-# Time / filter normalization
+# Section 1: 时间归一化 + download filters
 # ---------------------------------------------------------------------------
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -79,67 +111,173 @@ def build_download_filters(
 
 
 # ---------------------------------------------------------------------------
-# Structured-output schema (consumed by create_agent response_format)
+# Section 2: bulk_schema 响应解码 + prompt 渲染
 # ---------------------------------------------------------------------------
 
-OUTPUT_SPEC = """你的探测结论必须直接按给定 schema 的字段填写,不要输出自然语言总结。字段规则:
 
-- status="found" 要求 database / table / field 三字段非空;key_fields 填写主键/时间键列名。
-- status="not_found" 时 source/key_fields/filters 保持 null 或空。
-- filters 不要写时间范围;运行时会从 EmpiricalSpec.time_range_start/end
-  自动生成 start_date/end_date。若 CSMAR 需要额外样本筛选,只允许填写
-  {"condition": "..."}。
-- 不要编造探测未覆盖的信息;不确定就留 null。
-- record_count 留 null 即可:行数与覆盖率验证由后续阶段以代码完成,你不需要在此估算。
-"""
+class BucketKey(NamedTuple):
+    database: str
+    table: str
 
 
-class VariableProbeFindingModel(BaseModel):
-    """LLM-facing structured-output schema for one variable's probe finding."""
-
-    status: Literal["found", "not_found"] = Field(
-        description="found if the agent located a usable data source, otherwise not_found"
-    )
-    database: str | None = Field(default=None, description="Source database name (found only)")
-    table: str | None = Field(default=None, description="Source table name (found only)")
-    field: str | None = Field(default=None, description="Variable column name (found only)")
-    record_count: int | None = Field(
-        default=None, description="Record count if reported by the agent"
-    )
-    key_fields: list[str] | None = Field(
-        default=None, description="Primary/time key columns for the source table"
-    )
-    filters: dict[str, str] | None = Field(
-        default=None, description="Confirmed time/sample filters keyed by column"
-    )
+class BulkSchemaResult(NamedTuple):
+    schema_dict: dict[str, list[dict[str, Any]]]
+    failed_table_codes: list[str]
 
 
-class PendingValidation(TypedDict):
-    """A field-level finding waiting for the coverage-validation phase."""
-
-    variable: VariableDefinition
-    finding: VariableProbeFindingModel
+def _str_or_empty(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
 
 
-class CoverageOutcome(TypedDict):
-    """Decoded result of a single ``csmar_probe_query`` call."""
+def parse_bulk_schema_response(raw: object) -> BulkSchemaResult:
+    """Decode csmar_bulk_schema response into a table_code → fields dictionary.
 
-    can_materialize: bool
-    invalid_columns: list[str]
-    validation_id: str | None
-    row_count: int | None
-    failure_reason: str | None
+    Accepts the dict shape produced by langchain-mcp-adapters wrapping
+    ``BulkSchemaOutput``. Items with ``error != null`` or missing ``fields`` are
+    moved to ``failed_table_codes``;调用方据此从候选清单中剔除。
+    """
+    schema_dict: dict[str, list[dict[str, Any]]] = {}
+    failed: list[str] = []
+    if not isinstance(raw, dict):
+        return BulkSchemaResult(schema_dict=schema_dict, failed_table_codes=failed)
+    items = raw.get("items")
+    if not isinstance(items, list):
+        return BulkSchemaResult(schema_dict=schema_dict, failed_table_codes=failed)
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        table_code = _str_or_empty(item.get("table_code"))
+        if not table_code:
+            continue
+        fields_raw = item.get("fields")
+        if item.get("error") is not None or not isinstance(fields_raw, list):
+            failed.append(table_code)
+            continue
+        fields: list[dict[str, Any]] = [f for f in fields_raw if isinstance(f, dict)]
+        schema_dict[table_code] = fields
+
+    return BulkSchemaResult(schema_dict=schema_dict, failed_table_codes=failed)
 
 
-class CoverageEntry(TypedDict):
-    """Pairing of a pending validation with the probe outcome it produced."""
-
-    pending: PendingValidation
-    outcome: CoverageOutcome
+def format_schema_for_prompt(table_code: str, fields: list[dict[str, Any]]) -> str:
+    """Render a single table's schema as a compact markdown block for prompts."""
+    lines = [f"### Table `{table_code}` ({len(fields)} fields)"]
+    for f in fields:
+        name = f.get("field_name") or ""
+        if not name:
+            continue
+        label = f.get("field_label") or ""
+        dtype = f.get("data_type") or ""
+        desc = f.get("field_description") or ""
+        suffix_parts: list[str] = []
+        if label:
+            suffix_parts.append(label)
+        if dtype:
+            suffix_parts.append(f"type={dtype}")
+        if desc:
+            suffix_parts.append(desc)
+        suffix = f" — {' | '.join(suffix_parts)}" if suffix_parts else ""
+        lines.append(f"- `{name}`{suffix}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# Report / manifest construction
+# Section 3: 分桶 + 多桶结果合并
+# ---------------------------------------------------------------------------
+
+
+def bucket_plans(
+    plans: list[VariablePlan],
+    variables_by_name: dict[str, VariableDefinition],
+    schema_dict: dict[str, list[dict[str, Any]]],
+) -> tuple[
+    dict[BucketKey, list[VariableDefinition]],
+    list[VariableDefinition],
+]:
+    """Cartesian-explode (variable, candidate_table) pairs into bucket buckets.
+
+    Returns ``(buckets, unplanned)`` where:
+
+    - ``buckets[(db, table)]`` 是一组变量定义,代表该桶 LLM 调用要判定的变量
+    - ``unplanned`` 是 plan 完全没给候选表(或所有候选表都不在 schema_dict 中)的变量
+    """
+    buckets: dict[BucketKey, list[VariableDefinition]] = {}
+    unplanned: list[VariableDefinition] = []
+
+    for plan in plans:
+        var = variables_by_name.get(plan.variable_name)
+        if var is None:
+            continue
+        candidates = [c for c in plan.candidate_table_codes if c in schema_dict]
+        if not candidates:
+            unplanned.append(var)
+            continue
+        for table_code in candidates:
+            key = BucketKey(database=plan.target_database, table=table_code)
+            buckets.setdefault(key, []).append(var)
+
+    return buckets, unplanned
+
+
+def merge_bucket_results(
+    bucket_outputs: list[tuple[BucketKey, BucketVerificationOutput]],
+    planned_variables: list[VariableDefinition],
+    schema_dict: dict[str, list[dict[str, Any]]],
+) -> list[tuple[VariableDefinition, VariableProbeFindingModel]]:
+    """Collapse per-bucket outputs into a single finding per variable.
+
+    优先级:
+    1. 任一桶判定 found(且 field 在该桶 schema 中存在)→ 取第一个有效 found
+    2. 否则 → 纯 not_found
+    """
+    by_var_name = {v["name"]: v for v in planned_variables}
+    per_var_findings: dict[str, list[tuple[BucketKey, BucketVariableFinding]]] = {
+        v["name"]: [] for v in planned_variables
+    }
+
+    for bucket_key, output in bucket_outputs:
+        for finding in output.results:
+            if finding.variable_name in per_var_findings:
+                per_var_findings[finding.variable_name].append((bucket_key, finding))
+
+    results: list[tuple[VariableDefinition, VariableProbeFindingModel]] = []
+    for name, var in by_var_name.items():
+        bucket_findings = per_var_findings.get(name, [])
+        chosen_found = _pick_first_valid_found(bucket_findings, schema_dict)
+        if chosen_found is not None:
+            results.append((var, chosen_found))
+            continue
+        results.append((var, VariableProbeFindingModel(status="not_found")))
+    return results
+
+
+def _pick_first_valid_found(
+    bucket_findings: list[tuple[BucketKey, BucketVariableFinding]],
+    schema_dict: dict[str, list[dict[str, Any]]],
+) -> VariableProbeFindingModel | None:
+    for bucket_key, finding in bucket_findings:
+        if finding.status != "found" or not finding.field:
+            continue
+        schema = schema_dict.get(bucket_key.table, [])
+        valid_fields = {
+            f["field_name"].strip() for f in schema if isinstance(f.get("field_name"), str)
+        }
+        if finding.field.strip() not in valid_fields:
+            continue
+        return VariableProbeFindingModel(
+            status="found",
+            database=bucket_key.database,
+            table=bucket_key.table,
+            field=finding.field.strip(),
+            key_fields=list(finding.key_fields or []) or None,
+            filters=dict(finding.filters or {}) or None,
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Section 4: ProbeReport / DownloadManifest 构造
 # ---------------------------------------------------------------------------
 
 
@@ -240,7 +378,7 @@ def merge_into_manifest(
 
 
 # ---------------------------------------------------------------------------
-# Coverage-validation phase: build payload, decode response, run probe_query
+# Section 5: probe_query payload + 响应解码
 # ---------------------------------------------------------------------------
 
 
@@ -321,27 +459,6 @@ def parse_probe_query_response(raw: object, context: str) -> CoverageOutcome:
         row_count=row_count,
         failure_reason=None,
     )
-
-
-async def run_probe_coverage(
-    probe_tool: BaseTool, payload: dict[str, object], context: str
-) -> CoverageOutcome:
-    """Invoke the probe_query tool and decode the response into CoverageOutcome.
-
-    任何调用抛出的异常都在本函数捕获,转写为 ``can_materialize=False`` 的 outcome。
-    上游 coverage_validation_handler 据此走 hard/soft 路由,不再抛 RuntimeError。
-    """
-    try:
-        raw = await probe_tool.ainvoke(payload)
-    except Exception as exc:
-        return CoverageOutcome(
-            can_materialize=False,
-            invalid_columns=[],
-            validation_id=None,
-            row_count=None,
-            failure_reason=f"{context}: probe_query call failed: {exc}",
-        )
-    return parse_probe_query_response(raw, context)
 
 
 def _coerce_string_list(value: object) -> list[str]:

@@ -21,7 +21,7 @@ import pytest
 from langchain_core.tools import BaseTool, tool
 
 from harness_stata.state import EmpiricalSpec
-from harness_stata.subgraphs.probe_subgraph import build_probe_subgraph
+from harness_stata.subgraphs.probe import build_probe_subgraph
 
 
 @tool

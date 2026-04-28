@@ -1,16 +1,19 @@
-"""Coverage validation phase for the probe subgraph.
+"""Phase 5/6: Coverage validation — 批量 csmar_probe_query + 报告/manifest 固化。
 
 把覆盖率验证两个节点(``coverage_validator`` 调 ``csmar_probe_query`` 批量验证;
 ``coverage_validation_handler`` 把结果固化进 ProbeReport / DownloadManifest)与其
-内部 helper(``_format_coverage_failure``)聚合到本模块,以保持 ``_probe_nodes.py``
-聚焦字段发现流水线 0~4 阶段。
+私有 helper(``run_probe_coverage`` 的异步 probe_tool 调用、``_format_coverage_failure``)
+聚合到本模块。
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from harness_stata.subgraphs._probe_helpers import (
+from langchain_core.tools import BaseTool
+
+from harness_stata.subgraphs.probe.config import ProbeNodeConfig
+from harness_stata.subgraphs.probe.pure import (
     CoverageEntry,
     CoverageOutcome,
     build_found_result,
@@ -19,12 +22,9 @@ from harness_stata.subgraphs._probe_helpers import (
     ensure_manifest,
     ensure_report,
     merge_into_manifest,
-    run_probe_coverage,
+    parse_probe_query_response,
 )
-
-if TYPE_CHECKING:
-    from harness_stata.subgraphs._probe_nodes import ProbeNodeConfig
-    from harness_stata.subgraphs.probe_subgraph import ProbeState
+from harness_stata.subgraphs.probe.state import ProbeState
 
 
 async def coverage_validator(state: ProbeState, cfg: ProbeNodeConfig) -> dict[str, Any]:
@@ -94,6 +94,27 @@ def coverage_validation_handler(state: ProbeState) -> dict[str, Any]:
         "validation_queue": [],
         "coverage_outcomes": [],
     }
+
+
+async def run_probe_coverage(
+    probe_tool: BaseTool, payload: dict[str, object], context: str
+) -> CoverageOutcome:
+    """Invoke the probe_query tool and decode the response into CoverageOutcome.
+
+    任何调用抛出的异常都在本函数捕获,转写为 ``can_materialize=False`` 的 outcome。
+    上游 coverage_validation_handler 据此走 hard/soft 路由,不再抛 RuntimeError。
+    """
+    try:
+        raw = await probe_tool.ainvoke(payload)
+    except Exception as exc:
+        return CoverageOutcome(
+            can_materialize=False,
+            invalid_columns=[],
+            validation_id=None,
+            row_count=None,
+            failure_reason=f"{context}: probe_query call failed: {exc}",
+        )
+    return parse_probe_query_response(raw, context)
 
 
 def _format_coverage_failure(variable_name: str, outcome: CoverageOutcome) -> str:

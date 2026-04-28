@@ -37,18 +37,26 @@ harness-stata/
 │   │   ├── _agent_runner.py      # run_structured_agent 工厂：装配 create_agent + 校验 structured payload
 │   │   ├── requirement_analysis.py
 │   │   ├── model_construction.py
-│   │   ├── data_probe.py         # 内部调用 subgraphs/probe_subgraph 工厂
+│   │   ├── data_probe.py         # 内部调用 subgraphs/probe 工厂
 │   │   ├── hitl.py
 │   │   ├── data_download.py
 │   │   ├── data_cleaning.py      # 经 _agent_runner 工厂调用 create_agent（DuckDB SQL-first）
 │   │   ├── descriptive_stats.py  # 经 _agent_runner 工厂调用 create_agent
 │   │   └── regression.py         # 经 _agent_runner 工厂调用 create_agent
 │   ├── subgraphs/                # 可复用子图工厂（实现细节）
-│   │   ├── probe_subgraph.py     # build_probe_subgraph 工厂 + ProbeState + 路由 + 装配
-│   │   ├── _probe_nodes.py       # 阶段 1~4 节点函数 (planning / bulk_schema / verification / fallback)；planning 入口同时承担轮次初始化
-│   │   ├── _probe_coverage.py    # 阶段 5~6 节点函数 (coverage_validator / coverage_validation_handler)
-│   │   ├── _probe_pipeline.py    # 批量字段发现流水线纯逻辑（VariablePlan / 分桶 / 合并 / bulk_schema 解码）
-│   │   └── _probe_helpers.py     # 报告/manifest 构造 + coverage 解码 + 时间归一化等共享 helper
+│   │   └── probe/                # data_probe 子图（节点级 colocation + 共享 pure 纯逻辑）
+│   │       ├── __init__.py       # 对外只暴露 build_probe_subgraph + ProbeState
+│   │       ├── state.py          # ProbeState 状态切片 schema
+│   │       ├── schemas.py        # 所有 Pydantic schema + 3 段 LLM 输出规约字符串
+│   │       ├── pure.py           # 纯逻辑（时间归一化 / 分桶合并 / manifest / coverage 解码）+ 流转 TypedDict
+│   │       ├── config.py         # ProbeNodeConfig + compose_*_prompt 拼接 helper
+│   │       ├── graph.py          # 3 个路由函数 + build_probe_subgraph 工厂
+│   │       └── nodes/            # 6 节点逐文件 colocation
+│   │           ├── planning.py        # Phase 1: planning_agent
+│   │           ├── bulk_schema.py     # Phase 2: bulk_schema_phase
+│   │           ├── verification.py    # Phase 3: verification_phase
+│   │           ├── fallback.py        # Phase 4: fallback_react_phase
+│   │           └── coverage.py        # Phase 5/6: coverage_validator + handler
 │   ├── prompts/                  # Markdown 格式 system prompt
 │   │   └── __init__.py           # 提供 load_prompt(name)
 │   └── clients/                  # 外部依赖统一入口（contextmanager 管理生命周期）

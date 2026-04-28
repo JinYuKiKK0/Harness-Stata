@@ -168,3 +168,14 @@ layers = [
     "harness_stata.subgraphs",
     "harness_stata.clients",
 ]
+
+[[tool.importlinter.contracts]]
+name = """[probe-pure-isolation] subgraphs/probe/pure.py 不得 import langchain / langgraph——纯逻辑层必须无 LLM/编排框架依赖,这是单元清晰度的物理保证。
+Fix: 把涉及 LangChain/LangGraph 的代码搬到 subgraphs/probe/nodes/ 或 subgraphs/probe/graph.py;pure.py 只放无副作用、无外部依赖的纯函数。"""
+type = "forbidden"
+source_modules = ["harness_stata.subgraphs.probe.pure"]
+forbidden_modules = [
+    "langchain",
+    "langchain_core",
+    "langgraph",
+]

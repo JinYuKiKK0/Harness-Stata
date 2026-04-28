@@ -22,28 +22,20 @@ from harness_stata.state import (
     ProbeReport,
     WorkflowState,
 )
-from harness_stata.subgraphs.probe_subgraph import ProbeState, build_probe_subgraph
+from harness_stata.subgraphs.probe import ProbeState, build_probe_subgraph
 
 # ---------------------------------------------------------------------------
 # Tool exposure policy
 # ---------------------------------------------------------------------------
 
-# Planning Agent (阶段一) 的工具白名单:只允许 list_tables。
-# - csmar_list_tables     列出某数据库下的表(候选 table_code 必须出自此处)
 PLANNING_TOOLS: frozenset[str] = frozenset({"csmar_list_tables"})
 
-# Fallback 单变量 ReAct (阶段三兜底) 的工具白名单:仅列表 + 单表 schema 拉取。
-# csmar_bulk_schema 是 bulk_schema_phase 的代码节点专属(走 structuredContent
-# artifact),不暴露给 LLM。
 FALLBACK_TOOLS: frozenset[str] = frozenset(
     {
         "csmar_list_tables",
         "csmar_get_table_schema",
     }
 )
-
-# 兼容旧入口(测试白名单不变性):字段发现层允许暴露给任意 Agent 的工具集合
-ALLOWED_REACT_TOOLS: frozenset[str] = FALLBACK_TOOLS
 
 _LIST_DATABASES_TOOL = "csmar_list_databases"
 _BULK_SCHEMA_TOOL = "csmar_bulk_schema"

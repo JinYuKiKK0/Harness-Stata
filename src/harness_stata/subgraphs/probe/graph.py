@@ -19,70 +19,37 @@
         ▼
     coverage_validation_handler ──→ END
 
-详见 ``docs/empirical-analysis-workflow.md``。本文件只承载:
-- :class:`ProbeState` 子图状态 schema
-- :func:`build_probe_subgraph` 工厂(组装 ``ProbeNodeConfig`` + 节点 partial 绑定 + 路由 + 装配)
-
-节点函数实现位于 :mod:`harness_stata.subgraphs._probe_nodes`,纯流水线 helper 位于
-:mod:`harness_stata.subgraphs._probe_pipeline`,报告/manifest/coverage 解码位于
-:mod:`harness_stata.subgraphs._probe_helpers`。
+详见 ``docs/empirical-analysis-workflow.md``。本文件只承载路由函数与
+:func:`build_probe_subgraph` 工厂(组装 ``ProbeNodeConfig`` + 节点 partial 绑定 +
+路由 + 装配)。节点函数实现位于 :mod:`harness_stata.subgraphs.probe.nodes`,纯逻辑
+位于 :mod:`harness_stata.subgraphs.probe.pure`。
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import partial
-from typing import Any, Literal, TypedDict
+from typing import Literal
 
-from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from harness_stata.state import (
-    DownloadManifest,
-    EmpiricalSpec,
-    ModelPlan,
-    ProbeReport,
-    VariableDefinition,
-    WorkflowStatus,
+from harness_stata.subgraphs.probe.config import (
+    ProbeNodeConfig,
+    compose_fallback_prompt,
+    compose_planning_prompt,
+    compose_verification_prompt,
 )
-from harness_stata.subgraphs._probe_coverage import (
+from harness_stata.subgraphs.probe.nodes import (
+    bulk_schema_phase,
     coverage_validation_handler,
     coverage_validator,
-)
-from harness_stata.subgraphs._probe_helpers import (
-    CoverageEntry,
-    PendingValidation,
-)
-from harness_stata.subgraphs._probe_nodes import (
-    ProbeNodeConfig,
-    bulk_schema_phase,
     fallback_react_phase,
     planning_agent,
     verification_phase,
 )
-from harness_stata.subgraphs._probe_pipeline import (
-    PLANNING_OUTPUT_SPEC,
-    VariablePlan,
-)
-
-
-class ProbeState(TypedDict, total=False):
-    empirical_spec: EmpiricalSpec
-    model_plan: ModelPlan
-    probe_report: ProbeReport
-    download_manifest: DownloadManifest
-    workflow_status: WorkflowStatus
-    available_databases: str
-    pending_variables: list[VariableDefinition]
-    planning_queue: list[VariableDefinition]
-    plans: list[VariablePlan]
-    schema_dict: dict[str, list[dict[str, Any]]]
-    pending_hard_fallbacks: list[VariableDefinition]
-    validation_queue: list[PendingValidation]
-    coverage_outcomes: list[CoverageEntry]
-    messages: list[BaseMessage]
+from harness_stata.subgraphs.probe.state import ProbeState
 
 
 def build_probe_subgraph(
@@ -122,13 +89,9 @@ def build_probe_subgraph(
         fallback_tools=list(fallback_tools),
         bulk_schema_tool=bulk_schema_tool,
         probe_tool=probe_tool,
-        planning_system_prompt=f"{planning_prompt}\n\n---\n\n{PLANNING_OUTPUT_SPEC}",
-        verification_prompt=verification_prompt,
-        fallback_full_prompt=(
-            f"{fallback_prompt}\n\n---\n\n"
-            "你的探测结论必须按 VariableProbeFindingModel schema 输出。"
-            "status 只能是 found / not_found;found 时 database / table / field / key_fields 必填。"
-        ),
+        planning_system_prompt=compose_planning_prompt(planning_prompt),
+        verification_prompt=compose_verification_prompt(verification_prompt),
+        fallback_full_prompt=compose_fallback_prompt(fallback_prompt),
         planning_agent_max_calls=planning_agent_max_calls,
         fallback_react_max_calls=fallback_react_max_calls,
     )

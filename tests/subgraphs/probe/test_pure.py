@@ -11,19 +11,19 @@ Coverage scope follows CLAUDE.md test conventions:
 from __future__ import annotations
 
 from harness_stata.state import VariableDefinition
-from harness_stata.subgraphs._probe_helpers import (
-    normalize_time_bound,
-    parse_probe_query_response,
-)
-from harness_stata.subgraphs._probe_pipeline import (
+from harness_stata.subgraphs.probe.pure import (
     BucketKey,
-    BucketVariableFinding,
-    BucketVerificationOutput,
-    VariablePlan,
     bucket_plans,
     format_schema_for_prompt,
     merge_bucket_results,
+    normalize_time_bound,
     parse_bulk_schema_response,
+    parse_probe_query_response,
+)
+from harness_stata.subgraphs.probe.schemas import (
+    BucketVariableFinding,
+    BucketVerificationOutput,
+    VariablePlan,
 )
 
 
