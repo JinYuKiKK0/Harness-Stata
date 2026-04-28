@@ -109,8 +109,8 @@ async def descriptive_stats(state: WorkflowState) -> DescStatsReport:
     if err is not None:
         raise ValueError(err)
 
-    spec: EmpiricalSpec = state["empirical_spec"]  # pyright: ignore[reportTypedDictNotRequiredAccess]
-    merged: MergedDataset = state["merged_dataset"]  # pyright: ignore[reportTypedDictNotRequiredAccess]
+    spec: EmpiricalSpec = state["empirical_spec"]
+    merged: MergedDataset = state["merged_dataset"]
 
     session_dir = _derive_session_dir(merged["file_path"])
     do_path = session_dir / _DO_FILENAME

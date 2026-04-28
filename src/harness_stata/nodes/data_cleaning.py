@@ -15,12 +15,11 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, cast
 
 import duckdb
 import pandas as pd
 from duckdb import DuckDBPyConnection
-from langchain_core.tools import BaseTool, tool  # pyright: ignore[reportUnknownVariableType]
+from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
 from harness_stata.config import get_settings
@@ -137,11 +136,7 @@ def _probe_sources_for_prompt(
             f"     - {row['column_name']}: {row['column_type']}" for _, row in schema_df.iterrows()
         ]
         sample_df = conn.execute(f'SELECT * FROM "{view_name}" LIMIT {_SAMPLE_ROWS}').fetchdf()
-        sample_txt = (
-            sample_df.to_string(index=False)  # pyright: ignore[reportUnknownMemberType]
-            if len(sample_df) > 0
-            else "(empty table)"
-        )
+        sample_txt = sample_df.to_string(index=False) if len(sample_df) > 0 else "(empty table)"
         block = (
             f"{i}. path={f['path']}\n"
             f"   source_table={f['source_table']}  (registered view: {view_name})\n"
@@ -180,16 +175,16 @@ def _build_human_prompt(
 def _format_query_result(df: pd.DataFrame) -> str:
     """把 DuckDB 结果 DataFrame 渲染成供 LLM 阅读的预览字符串。"""
     total = len(df)
-    cols = cast("list[Any]", list(df.columns))
+    cols = list(df.columns)
     # DuckDB 对 DDL/DML/SET 会返回 0~1 行的 'Count'/'Success' 元结果。
     # 折叠成 "OK"，避免给 LLM 塞进误导性的元行。
     if len(cols) == 1 and cols[0] in _META_RESULT_COLUMNS:
         if total == 0:
             return "OK"
-        return f"OK (affected rows: {int(cast('Any', df.iat[0, 0]))})"
+        return f"OK (affected rows: {int(df.iat[0, 0])})"
     if total == 0:
         return "(no rows)"
-    preview = df.head(_PREVIEW_ROWS).to_string(index=False)  # pyright: ignore[reportUnknownMemberType]
+    preview = df.head(_PREVIEW_ROWS).to_string(index=False)
     if total <= _PREVIEW_ROWS:
         return f"{preview}\n(total rows: {total})"
     return f"{preview}\n... ({total - _PREVIEW_ROWS} more rows; total: {total})"
@@ -198,7 +193,7 @@ def _format_query_result(df: pd.DataFrame) -> str:
 def _make_sql_tool(conn: DuckDBPyConnection) -> BaseTool:
     """构建一个绑定到给定 DuckDB 连接的 ``run_sql`` 工具。"""
 
-    @tool  # pyright: ignore[reportUntypedFunctionDecorator, reportUnknownVariableType, reportUnknownArgumentType]
+    @tool
     def run_sql(query: str) -> str:
         """在共享的内存 DuckDB 连接上执行一条 SQL。
 
@@ -213,7 +208,7 @@ def _make_sql_tool(conn: DuckDBPyConnection) -> BaseTool:
         """
         try:
             cursor = conn.execute(query)
-            if cursor is None:  # pyright: ignore[reportUnnecessaryComparison]
+            if cursor is None:
                 # DuckDB 对 comment-only / 空语句返回 None，避免后续 .fetchdf() 炸 AttributeError
                 return "OK (no executable statement)"
             df = cursor.fetchdf()
@@ -297,9 +292,9 @@ def _check_post_conditions(
     primary_key: list[str],
     coverage_threshold: float,
 ) -> tuple[int, list[str], list[str]]:
-    df = pd.read_csv(csv_path)  # pyright: ignore[reportUnknownMemberType]
+    df = pd.read_csv(csv_path)
     row_count = len(df)
-    columns = [str(c) for c in cast("list[Any]", list(df.columns))]
+    columns = [str(c) for c in df.columns]
 
     missing_keys = [k for k in primary_key if k not in columns]
     if missing_keys:
@@ -308,7 +303,7 @@ def _check_post_conditions(
             f" in merged CSV columns {columns!r}"
         )
         raise RuntimeError(msg)
-    dup_count = int(cast("Any", df.duplicated(subset=primary_key).sum()))  # pyright: ignore[reportUnknownMemberType]
+    dup_count = int(df.duplicated(subset=primary_key).sum())
     if dup_count > 0:
         msg = (
             f"data_cleaning: merged CSV has {dup_count} duplicate rows"
@@ -325,7 +320,7 @@ def _check_post_conditions(
         if row_count == 0:
             warnings.append(f"variable {var['name']!r} column exists but CSV is empty")
             continue
-        non_null = int(cast("Any", df[col].notna().sum()))  # pyright: ignore[reportUnknownMemberType]
+        non_null = int(df[col].notna().sum())
         coverage = non_null / row_count
         if coverage < coverage_threshold:
             warnings.append(
@@ -348,8 +343,8 @@ async def data_cleaning(state: WorkflowState) -> MergedDataset:
     if err is not None:
         raise ValueError(err)
 
-    spec: EmpiricalSpec = state["empirical_spec"]  # pyright: ignore[reportTypedDictNotRequiredAccess]
-    files = state["downloaded_files"]["files"]  # pyright: ignore[reportTypedDictNotRequiredAccess]
+    spec: EmpiricalSpec = state["empirical_spec"]
+    files = state["downloaded_files"]["files"]
     output_path = _derive_output_path(files)
     stage_dir = output_path.parent / _STAGE_DIRNAME
     stage_dir.mkdir(parents=True, exist_ok=True)

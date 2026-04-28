@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict
 
 from langchain_core.messages import BaseMessage, ToolMessage
 from pydantic import BaseModel, Field
@@ -131,10 +131,9 @@ def _compute_sign_check(plan: ModelPlan, actual_sign: str) -> SignCheck:
 
 def _coerce_execution_payload(raw: object) -> dict[str, Any] | None:
     if isinstance(raw, Mapping):
-        raw_map = cast("Mapping[str, object]", raw)
-        if "status" in raw_map:
-            return cast("dict[str, Any]", dict(raw_map))
-        structured = raw_map.get("structured_content") or raw_map.get("structuredContent")
+        if "status" in raw:
+            return dict(raw)
+        structured = raw.get("structured_content") or raw.get("structuredContent")
         if structured is not None:
             return _coerce_execution_payload(structured)
     if isinstance(raw, str):
@@ -147,14 +146,13 @@ def _coerce_execution_payload(raw: object) -> dict[str, Any] | None:
 
 
 def _payload_from_content_blocks(message: ToolMessage) -> dict[str, Any] | None:
-    blocks = cast("Sequence[object]", message.content_blocks)
+    blocks = message.content_blocks
     for block in reversed(blocks):
         payload: dict[str, Any] | None
         if isinstance(block, str):
             payload = _coerce_execution_payload(block)
         elif isinstance(block, Mapping):
-            block_map = cast("Mapping[str, object]", block)
-            payload = _coerce_execution_payload(block_map.get("text"))
+            payload = _coerce_execution_payload(block.get("text"))
         else:
             payload = None
         if payload is not None:
@@ -239,9 +237,9 @@ async def regression(state: WorkflowState) -> RegressionOutput:
     if err is not None:
         raise ValueError(err)
 
-    plan: ModelPlan = state["model_plan"]  # pyright: ignore[reportTypedDictNotRequiredAccess]
-    spec: EmpiricalSpec = state["empirical_spec"]  # pyright: ignore[reportTypedDictNotRequiredAccess]
-    merged: MergedDataset = state["merged_dataset"]  # pyright: ignore[reportTypedDictNotRequiredAccess]
+    plan: ModelPlan = state["model_plan"]
+    spec: EmpiricalSpec = state["empirical_spec"]
+    merged: MergedDataset = state["merged_dataset"]
 
     session_dir = _derive_session_dir(merged["file_path"])
     do_path = session_dir / _DO_FILENAME

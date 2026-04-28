@@ -92,8 +92,10 @@ indent-style = "space"
 [tool.pyright]
 include = ["src/harness_stata"]
 pythonVersion = "3.12"
-typeCheckingMode = "strict"
+typeCheckingMode = "basic"
 reportMissingTypeStubs = "warning"
+# total=False TypedDict 入口处统一靠运行时 validate；类型层放过未必要键访问。
+reportTypedDictNotRequiredAccess = false
 venvPath = "."
 venv = ".venv"
 

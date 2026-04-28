@@ -78,35 +78,35 @@ def build_graph(
     """
     builder = StateGraph(WorkflowState)
 
-    builder.add_node("requirement_analysis", requirement_analysis)  # pyright: ignore[reportUnknownMemberType]
-    builder.add_node("model_construction", model_construction)  # pyright: ignore[reportUnknownMemberType]
-    builder.add_node("data_probe", data_probe)  # pyright: ignore[reportUnknownMemberType]
-    builder.add_node("hitl", hitl)  # pyright: ignore[reportUnknownMemberType]
-    builder.add_node("data_download", data_download)  # pyright: ignore[reportUnknownMemberType]
-    builder.add_node("data_cleaning", data_cleaning)  # pyright: ignore[reportUnknownMemberType]
-    builder.add_node("descriptive_stats", descriptive_stats)  # pyright: ignore[reportUnknownMemberType]
-    builder.add_node("regression", regression)  # pyright: ignore[reportUnknownMemberType]
+    builder.add_node("requirement_analysis", requirement_analysis)
+    builder.add_node("model_construction", model_construction)
+    builder.add_node("data_probe", data_probe)
+    builder.add_node("hitl", hitl)
+    builder.add_node("data_download", data_download)
+    builder.add_node("data_cleaning", data_cleaning)
+    builder.add_node("descriptive_stats", descriptive_stats)
+    builder.add_node("regression", regression)
 
-    builder.add_edge(START, "requirement_analysis")  # pyright: ignore[reportUnknownMemberType]
-    builder.add_edge("requirement_analysis", "model_construction")  # pyright: ignore[reportUnknownMemberType]
-    builder.add_edge("model_construction", "data_probe")  # pyright: ignore[reportUnknownMemberType]
+    builder.add_edge(START, "requirement_analysis")
+    builder.add_edge("requirement_analysis", "model_construction")
+    builder.add_edge("model_construction", "data_probe")
 
-    builder.add_conditional_edges(  # pyright: ignore[reportUnknownMemberType]
+    builder.add_conditional_edges(
         "data_probe",
         route_after_probe,
         {"hard_failure": END, "success": "hitl"},
     )
-    builder.add_conditional_edges(  # pyright: ignore[reportUnknownMemberType]
+    builder.add_conditional_edges(
         "hitl",
         route_after_hitl,
         {"rejected": END, "approved": "data_download"},
     )
 
-    builder.add_edge("data_download", "data_cleaning")  # pyright: ignore[reportUnknownMemberType]
-    builder.add_edge("data_cleaning", "descriptive_stats")  # pyright: ignore[reportUnknownMemberType]
-    builder.add_edge("descriptive_stats", "regression")  # pyright: ignore[reportUnknownMemberType]
-    builder.add_edge("regression", END)  # pyright: ignore[reportUnknownMemberType]
+    builder.add_edge("data_download", "data_cleaning")
+    builder.add_edge("data_cleaning", "descriptive_stats")
+    builder.add_edge("descriptive_stats", "regression")
+    builder.add_edge("regression", END)
 
     if use_checkpointer:
-        return builder.compile(checkpointer=InMemorySaver())  # pyright: ignore[reportUnknownMemberType]
-    return builder.compile()  # pyright: ignore[reportUnknownMemberType]
+        return builder.compile(checkpointer=InMemorySaver())
+    return builder.compile()

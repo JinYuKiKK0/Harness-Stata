@@ -71,19 +71,6 @@ from harness_stata.subgraphs._probe_pipeline import (
 
 
 class ProbeState(TypedDict, total=False):
-    """Internal state of the probe subgraph.
-
-    Slices shared with the parent ``WorkflowState`` (read-in / write-back):
-    ``empirical_spec``, ``model_plan``, ``probe_report``, ``download_manifest``,
-    ``workflow_status``.
-
-    Slices private to this subgraph (do not leak to the parent graph):
-    ``pending_variables`` / ``planning_queue`` / ``plans`` / ``schema_dict`` /
-    ``pending_hard_fallbacks`` / ``validation_queue`` / ``coverage_outcomes`` /
-    ``substitute_meta`` / ``substitute_queue`` / ``substitute_round`` /
-    ``pipeline_initialized`` / ``available_databases`` / ``messages``.
-    """
-
     empirical_spec: EmpiricalSpec
     model_plan: ModelPlan
     probe_report: ProbeReport
@@ -193,12 +180,12 @@ def build_probe_subgraph(
         return "__end__"
 
     graph: StateGraph[ProbeState, ProbeState, ProbeState, ProbeState] = StateGraph(ProbeState)
-    graph.add_node("planning_agent", partial(planning_agent, cfg=cfg))  # pyright: ignore[reportUnknownMemberType]
-    graph.add_node("bulk_schema_phase", partial(bulk_schema_phase, cfg=cfg))  # pyright: ignore[reportUnknownMemberType]
-    graph.add_node("verification_phase", partial(verification_phase, cfg=cfg))  # pyright: ignore[reportUnknownMemberType]
-    graph.add_node("fallback_react_phase", partial(fallback_react_phase, cfg=cfg))  # pyright: ignore[reportUnknownMemberType]
-    graph.add_node("coverage_validator", partial(coverage_validator, cfg=cfg))  # pyright: ignore[reportUnknownMemberType]
-    graph.add_node("coverage_validation_handler", coverage_validation_handler)  # pyright: ignore[reportUnknownMemberType]
+    graph.add_node("planning_agent", partial(planning_agent, cfg=cfg))
+    graph.add_node("bulk_schema_phase", partial(bulk_schema_phase, cfg=cfg))
+    graph.add_node("verification_phase", partial(verification_phase, cfg=cfg))
+    graph.add_node("fallback_react_phase", partial(fallback_react_phase, cfg=cfg))
+    graph.add_node("coverage_validator", partial(coverage_validator, cfg=cfg))
+    graph.add_node("coverage_validation_handler", coverage_validation_handler)
 
     graph.add_edge(START, "planning_agent")
     graph.add_conditional_edges(
@@ -229,4 +216,4 @@ def build_probe_subgraph(
         _route_after_coverage_handler,
         {"planning_agent": "planning_agent", END: END},
     )
-    return graph.compile()  # pyright: ignore[reportUnknownMemberType]
+    return graph.compile()

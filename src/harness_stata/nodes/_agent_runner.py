@@ -12,9 +12,9 @@ ToolMessage) does not require a second invocation.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import Any
 
-from langchain.agents import create_agent  # pyright: ignore[reportUnknownVariableType]
+from langchain.agents import create_agent
 from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 from langchain.agents.structured_output import ToolStrategy
@@ -40,16 +40,16 @@ async def run_structured_agent[T: BaseModel](
     """
     agent = create_agent(
         model=get_chat_model(),
-        tools=list(tools),  # type: ignore[arg-type]
+        tools=list(tools),
         system_prompt=system_prompt,
         middleware=[
             ModelCallLimitMiddleware(run_limit=max_iterations, exit_behavior="error"),
         ],
         response_format=ToolStrategy(output_schema),
     )
-    initial = {"messages": [HumanMessage(content=human_message)]}
+    initial: Any = {"messages": [HumanMessage(content=human_message)]}
     try:
-        result: dict[str, Any] = await agent.ainvoke(initial)  # type: ignore[reportUnknownMemberType]
+        result: dict[str, Any] = await agent.ainvoke(initial)
     except ModelCallLimitExceededError as exc:
         raise RuntimeError(
             f"{node_name}: ReAct reached max_iterations ({max_iterations})"
@@ -63,6 +63,6 @@ async def run_structured_agent[T: BaseModel](
             f" (got {type(payload).__name__})"
         )
 
-    messages_raw: object = result.get("messages")
-    messages = cast("list[BaseMessage]", messages_raw) if isinstance(messages_raw, list) else []
+    messages_raw = result.get("messages")
+    messages: list[BaseMessage] = messages_raw if isinstance(messages_raw, list) else []
     return payload, messages

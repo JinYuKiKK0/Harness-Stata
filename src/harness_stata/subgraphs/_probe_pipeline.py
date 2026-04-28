@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, NamedTuple, cast
+from typing import Any, Literal, NamedTuple
 
 from pydantic import BaseModel
 
@@ -118,26 +118,21 @@ def parse_bulk_schema_response(raw: object) -> BulkSchemaResult:
     failed: list[str] = []
     if not isinstance(raw, dict):
         return BulkSchemaResult(schema_dict=schema_dict, failed_table_codes=failed)
-    payload = cast("dict[str, Any]", raw)
-    items = payload.get("items")
+    items = raw.get("items")
     if not isinstance(items, list):
         return BulkSchemaResult(schema_dict=schema_dict, failed_table_codes=failed)
 
-    for item in cast("list[Any]", items):
+    for item in items:
         if not isinstance(item, dict):
             continue
-        item_dict = cast("dict[str, Any]", item)
-        table_code = _str_or_empty(item_dict.get("table_code"))
+        table_code = _str_or_empty(item.get("table_code"))
         if not table_code:
             continue
-        fields_raw = item_dict.get("fields")
-        if item_dict.get("error") is not None or not isinstance(fields_raw, list):
+        fields_raw = item.get("fields")
+        if item.get("error") is not None or not isinstance(fields_raw, list):
             failed.append(table_code)
             continue
-        fields: list[dict[str, Any]] = []
-        for f in cast("list[Any]", fields_raw):
-            if isinstance(f, dict):
-                fields.append(cast("dict[str, Any]", f))
+        fields: list[dict[str, Any]] = [f for f in fields_raw if isinstance(f, dict)]
         schema_dict[table_code] = fields
 
     return BulkSchemaResult(schema_dict=schema_dict, failed_table_codes=failed)
@@ -245,9 +240,7 @@ def _pick_first_valid_found(
             continue
         schema = schema_dict.get(bucket_key.table, [])
         valid_fields = {
-            cast("str", f["field_name"]).strip()
-            for f in schema
-            if isinstance(f.get("field_name"), str)
+            f["field_name"].strip() for f in schema if isinstance(f.get("field_name"), str)
         }
         if finding.field.strip() not in valid_fields:
             continue

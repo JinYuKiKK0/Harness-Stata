@@ -21,7 +21,7 @@ import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from langchain_core.tools import BaseTool
 
@@ -113,13 +113,13 @@ def _coerce_dict(raw: object, context: str) -> dict[str, Any]:
     if not isinstance(raw, dict):
         msg = f"{context}: expected dict response, got {type(raw).__name__}"
         raise RuntimeError(msg)
-    return cast("dict[str, Any]", raw)
+    return raw
 
 
 def _extract_validation_id(probe_result: Mapping[str, Any], task: DownloadTask) -> str:
     table = task["table"]
     if probe_result.get("can_materialize") is not True:
-        invalid = cast("list[Any]", probe_result.get("invalid_columns") or [])
+        invalid = probe_result.get("invalid_columns") or []
         msg = (
             f"csmar_probe_query refused materialize for table {table}: "
             f"can_materialize={probe_result.get('can_materialize')!r}, "
@@ -139,7 +139,7 @@ def _extract_file_paths(mat_result: Mapping[str, Any], task: DownloadTask) -> li
         msg = f"csmar_materialize_query returned no files for table {task['table']}"
         raise RuntimeError(msg)
     paths: list[str] = []
-    for entry in cast("list[object]", files):
+    for entry in files:
         if not isinstance(entry, str) or not entry:
             msg = (
                 f"csmar_materialize_query returned non-string file entry for table {task['table']}"
@@ -173,7 +173,7 @@ async def data_download(state: WorkflowState) -> DownloadedFiles:
     if err is not None:
         raise ValueError(err)
 
-    manifest: DownloadManifest = state["download_manifest"]  # type: ignore[reportTypedDictNotRequiredAccess]
+    manifest: DownloadManifest = state["download_manifest"]
     session_dir = _make_session_dir(get_settings().downloads_root)
     collected: list[DownloadedFile] = []
 
@@ -187,14 +187,14 @@ async def data_download(state: WorkflowState) -> DownloadedFiles:
         materialize_tool = by_name[_MATERIALIZE_TOOL_NAME]
 
         for task in manifest["items"]:
-            probe_raw = await probe_tool.ainvoke(_build_probe_payload(task))  # pyright: ignore[reportUnknownMemberType]
+            probe_raw = await probe_tool.ainvoke(_build_probe_payload(task))
             probe_result = _coerce_dict(
                 probe_raw, f"csmar_probe_query response for table {task['table']}"
             )
             validation_id = _extract_validation_id(probe_result, task)
 
             task_dir = _make_task_dir(session_dir, task)
-            mat_raw = await materialize_tool.ainvoke(  # pyright: ignore[reportUnknownMemberType]
+            mat_raw = await materialize_tool.ainvoke(
                 {"validation_id": validation_id, "output_dir": str(task_dir)}
             )
             mat_result = _coerce_dict(

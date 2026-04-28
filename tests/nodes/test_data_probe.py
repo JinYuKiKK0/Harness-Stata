@@ -55,15 +55,16 @@ def test_data_probe_react_tool_whitelist_pinned() -> None:
     """字段发现阶段允许暴露给 Agent 的工具集是显式白名单。
 
     Planning Agent 只能用 list_tables(候选表必须出自 list_tables 返回);
-    Fallback 单变量 ReAct 可以用 list_tables + bulk_schema + get_table_schema。
-    csmar_search_field / csmar_list_databases / probe_query /
-    materialize_query / refresh_cache 永远不应出现在任何 Agent 的工具集里。
+    Fallback 单变量 ReAct 可以用 list_tables + get_table_schema。
+    csmar_bulk_schema 是 bulk_schema_phase 的代码节点专属(走 structuredContent
+    artifact),不暴露给 LLM。csmar_search_field / csmar_list_databases /
+    probe_query / materialize_query / refresh_cache 永远不应出现在任何 Agent 的
+    工具集里。
     """
     assert PLANNING_TOOLS == frozenset({"csmar_list_tables"})
     assert FALLBACK_TOOLS == frozenset(
         {
             "csmar_list_tables",
-            "csmar_bulk_schema",
             "csmar_get_table_schema",
         }
     )
@@ -71,6 +72,7 @@ def test_data_probe_react_tool_whitelist_pinned() -> None:
     assert ALLOWED_REACT_TOOLS == FALLBACK_TOOLS
 
     forbidden = {
+        "csmar_bulk_schema",
         "csmar_search_field",
         "csmar_list_databases",
         "csmar_probe_query",

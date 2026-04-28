@@ -15,7 +15,7 @@ import json
 import uuid
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import typer
 from langgraph.types import Command
@@ -38,7 +38,7 @@ app = typer.Typer(add_completion=False, no_args_is_help=True)
 
 
 @app.callback()
-def _main() -> None:  # pyright: ignore[reportUnusedFunction]
+def _main() -> None:
     """Harness-Stata: LangGraph-driven empirical analysis workflow."""
 
 
@@ -58,7 +58,7 @@ def _interrupt_payload(result: dict[str, Any]) -> dict[str, Any] | None:
     first = interrupts[0]
     value = getattr(first, "value", None)
     if isinstance(value, dict):
-        return cast("dict[str, Any]", value)
+        return value
     return None
 
 
@@ -160,14 +160,14 @@ async def _drive_graph(initial: WorkflowState, thread_id: str) -> dict[str, Any]
     graph = build_graph()
     config: Any = {"configurable": {"thread_id": thread_id}}
 
-    result: dict[str, Any] = await graph.ainvoke(initial, config=config)  # pyright: ignore[reportUnknownMemberType]
+    result: dict[str, Any] = await graph.ainvoke(initial, config=config)
 
     while (payload := _interrupt_payload(result)) is not None:
         decision = _prompt_hitl_decision(payload)
-        result = await graph.ainvoke(Command(resume=decision), config=config)  # pyright: ignore[reportUnknownMemberType]
+        result = await graph.ainvoke(Command(resume=decision), config=config)
 
-    snapshot = await graph.aget_state(config)  # pyright: ignore[reportUnknownMemberType]
-    return cast("dict[str, Any]", snapshot.values)
+    snapshot = await graph.aget_state(config)
+    return snapshot.values
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ def run(
         "sample_scope": sample_scope,
         "time_range_start": time_range_start,
         "time_range_end": time_range_end,
-        "data_frequency": data_frequency.value,  # pyright: ignore[reportAssignmentType]
+        "data_frequency": data_frequency.value,
     }
     tid = thread_id or str(uuid.uuid4())
     if apply_langsmith_env():

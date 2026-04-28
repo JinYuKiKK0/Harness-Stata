@@ -65,7 +65,7 @@ class _ModelPlanModel(BaseModel):
 @writes_to("model_plan")
 def model_construction(state: WorkflowState) -> ModelPlan:
     """Translate EmpiricalSpec into a structured ModelPlan."""
-    spec: EmpiricalSpec = state["empirical_spec"]  # type: ignore[reportTypedDictNotRequiredAccess]
+    spec: EmpiricalSpec = state["empirical_spec"]
 
     system_prompt = load_prompt("model_construction")
     user_message = _format_empirical_spec(spec)

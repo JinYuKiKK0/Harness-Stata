@@ -11,7 +11,7 @@ docs/empirical-analysis-workflow.md.
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict
 
 from langgraph.types import interrupt
 
@@ -181,7 +181,7 @@ def _format_plan(
 def _validate(raw: object) -> str | None:
     if not isinstance(raw, dict):
         return "decision must be a dict"
-    data = cast("dict[str, Any]", raw)
+    data = raw
     approved = data.get("approved")
     if not isinstance(approved, bool):
         return "'approved' must be a bool"
@@ -216,7 +216,7 @@ def _request_decision(plan_text: str) -> dict[str, Any]:
         err = _validate(raw)
         if err is None:
             assert isinstance(raw, dict)
-            return cast("dict[str, Any]", raw)
+            return raw
         error = err
     raise ValueError(f"HITL decision validation failed after {_MAX_INTERRUPT_ATTEMPTS} attempts")
 
@@ -244,9 +244,9 @@ def _build_return(decision: dict[str, Any]) -> HitlOutput:
 
 def hitl(state: WorkflowState) -> HitlOutput:
     """Present research plan and collect approve/reject decision via interrupt."""
-    spec: EmpiricalSpec = state["empirical_spec"]  # type: ignore[reportTypedDictNotRequiredAccess]
-    plan: ModelPlan = state["model_plan"]  # type: ignore[reportTypedDictNotRequiredAccess]
-    report: ProbeReport = state["probe_report"]  # type: ignore[reportTypedDictNotRequiredAccess]
+    spec: EmpiricalSpec = state["empirical_spec"]
+    plan: ModelPlan = state["model_plan"]
+    report: ProbeReport = state["probe_report"]
 
     plan_text = _format_plan(spec, plan, report)
     decision = _request_decision(plan_text)

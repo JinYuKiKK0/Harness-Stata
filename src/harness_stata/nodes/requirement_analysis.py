@@ -56,7 +56,7 @@ class _EmpiricalSpecModel(BaseModel):
 def requirement_analysis(state: WorkflowState) -> EmpiricalSpec:
     """Parse user requirements into a structured EmpiricalSpec."""
     # user_request is guaranteed to be present: it is set as initial state by the CLI
-    user_req: UserRequest = state["user_request"]  # type: ignore[reportTypedDictNotRequiredAccess]
+    user_req: UserRequest = state["user_request"]
 
     system_prompt = load_prompt("requirement_analysis")
     user_message = _format_user_message(user_req)

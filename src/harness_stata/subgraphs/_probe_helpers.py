@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import calendar
 import re
-from typing import Any, Literal, TypedDict, cast
+from typing import Literal, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -406,7 +406,7 @@ def parse_probe_query_response(raw: object, context: str) -> CoverageOutcome:
             row_count=None,
             failure_reason=f"{context}: expected dict response, got {type(raw).__name__}",
         )
-    payload = cast("dict[str, Any]", raw)
+    payload = raw
 
     invalid_columns = _coerce_string_list(payload.get("invalid_columns"))
     row_count = _coerce_int_or_none(payload.get("row_count"))
@@ -451,7 +451,7 @@ async def run_probe_coverage(
     上游 coverage_validation_handler 据此走 hard/soft 路由,不再抛 RuntimeError。
     """
     try:
-        raw = await probe_tool.ainvoke(payload)  # pyright: ignore[reportUnknownMemberType]
+        raw = await probe_tool.ainvoke(payload)
     except Exception as exc:
         return CoverageOutcome(
             can_materialize=False,
@@ -466,8 +466,7 @@ async def run_probe_coverage(
 def _coerce_string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
-    items = cast("list[Any]", value)
-    return [item for item in items if isinstance(item, str)]
+    return [item for item in value if isinstance(item, str)]
 
 
 def _coerce_int_or_none(value: object) -> int | None:

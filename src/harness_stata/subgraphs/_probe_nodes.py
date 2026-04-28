@@ -1,11 +1,6 @@
 """Node implementations for the batch probe subgraph (字段发现阶段 1~4)。
 
-4 个节点(planning_agent / bulk_schema / verification / fallback_react)从工厂闭包
-里提到模块级,通过 :class:`ProbeNodeConfig` 显式传依赖。轮次初始化逻辑(首轮 vs
-substitute 重试)直接放在 planning_agent 入口。Coverage 验证两个节点
-(coverage_validator / coverage_validation_handler)在
-:mod:`harness_stata.subgraphs._probe_coverage`。
-
+4 个节点(planning_agent / bulk_schema / verification / fallback_react)
 设计要点:
 
 - 节点函数签名统一为 ``(state, cfg) -> dict``,工厂层用 ``functools.partial`` 绑定 cfg
@@ -18,7 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from langchain.agents import create_agent  # pyright: ignore[reportUnknownVariableType]
+from langchain.agents import create_agent
 from langchain.agents.middleware import ToolCallLimitMiddleware
 from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import HumanMessage
@@ -78,7 +73,7 @@ async def planning_agent(state: ProbeState, cfg: ProbeNodeConfig) -> dict[str, A
     后续 substitute 重试:从 ``substitute_queue`` 取队列,``substitute_round`` 自增。
     队列空 → 直接返回 shaped report/manifest,路由层会落到 END。
     """
-    spec = state["empirical_spec"]  # type: ignore[reportTypedDictNotRequiredAccess]
+    spec = state["empirical_spec"]
     if not state.get("pipeline_initialized"):
         queue: list[VariableDefinition] = list(spec["variables"])
         substitute_round = 0
@@ -118,7 +113,7 @@ async def planning_agent(state: ProbeState, cfg: ProbeNodeConfig) -> dict[str, A
     )
     agent = create_agent(
         model=get_chat_model(),
-        tools=list(cfg.planning_tools),  # type: ignore[arg-type]
+        tools=list(cfg.planning_tools),
         system_prompt=cfg.planning_system_prompt,
         middleware=[
             ToolCallLimitMiddleware(
@@ -128,7 +123,7 @@ async def planning_agent(state: ProbeState, cfg: ProbeNodeConfig) -> dict[str, A
         ],
         response_format=ToolStrategy(PlanningOutput),
     )
-    result: dict[str, Any] = await agent.ainvoke({"messages": [human]})  # type: ignore[reportUnknownMemberType]
+    result: dict[str, Any] = await agent.ainvoke({"messages": [human]})
     planning = result.get("structured_response")
     plans: list[VariablePlan] = list(planning.plans) if isinstance(planning, PlanningOutput) else []
     return {
@@ -161,10 +156,21 @@ async def bulk_schema_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[str
     if not candidates:
         return {"schema_dict": {}}
     try:
-        raw = await cfg.bulk_schema_tool.ainvoke({"table_codes": candidates})  # pyright: ignore[reportUnknownMemberType]
+        msg: Any = await cfg.bulk_schema_tool.ainvoke(
+            {
+                "name": cfg.bulk_schema_tool.name,
+                "args": {"table_codes": candidates},
+                "id": "probe-bulk-schema",
+                "type": "tool_call",
+            }
+        )
     except Exception:
         return {"schema_dict": {}}
-    result = parse_bulk_schema_response(raw)
+    artifact = getattr(msg, "artifact", None)
+    payload: object = None
+    if isinstance(artifact, dict) and "structured_content" in artifact:
+        payload = artifact["structured_content"]
+    result = parse_bulk_schema_response(payload)
     return {"schema_dict": result.schema_dict}
 
 
@@ -262,7 +268,9 @@ async def _run_verification_buckets(
     schema_dict: dict[str, list[dict[str, Any]]],
     cfg: ProbeNodeConfig,
 ) -> list[tuple[BucketKey, BucketVerificationOutput]]:
-    chat = get_chat_model().with_structured_output(BucketVerificationOutput)  # pyright: ignore[reportUnknownMemberType]
+    chat = get_chat_model().with_structured_output(
+        BucketVerificationOutput, method="function_calling"
+    )
     bucket_outputs: list[tuple[BucketKey, BucketVerificationOutput]] = []
     for bucket_key, vars_in_bucket in buckets.items():
         schema_block = format_schema_for_prompt(
@@ -282,7 +290,7 @@ async def _run_verification_buckets(
             )
         )
         try:
-            raw_out: Any = await chat.ainvoke([human])  # pyright: ignore[reportUnknownMemberType]
+            raw_out: Any = await chat.ainvoke([human])
         except Exception:
             raw_out = BucketVerificationOutput(results=[])
         if isinstance(raw_out, BucketVerificationOutput):
@@ -302,7 +310,7 @@ async def fallback_react_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[
     if not fallbacks:
         return {"pending_hard_fallbacks": []}
 
-    spec = state["empirical_spec"]  # type: ignore[reportTypedDictNotRequiredAccess]
+    spec = state["empirical_spec"]
     db_block = state.get("available_databases", "")
     validation_queue = list(state.get("validation_queue") or [])
     report = ensure_report(state.get("probe_report"))
@@ -322,7 +330,7 @@ async def fallback_react_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[
         )
         agent = create_agent(
             model=get_chat_model(),
-            tools=list(cfg.fallback_tools),  # type: ignore[arg-type]
+            tools=list(cfg.fallback_tools),
             system_prompt=cfg.fallback_full_prompt,
             middleware=[
                 ToolCallLimitMiddleware(
@@ -332,7 +340,7 @@ async def fallback_react_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[
             ],
             response_format=ToolStrategy(VariableProbeFindingModel),
         )
-        result: dict[str, Any] = await agent.ainvoke({"messages": [human]})  # type: ignore[reportUnknownMemberType]
+        result: dict[str, Any] = await agent.ainvoke({"messages": [human]})
         finding = result.get("structured_response")
         if not isinstance(finding, VariableProbeFindingModel):
             finding = VariableProbeFindingModel(status="not_found")
