@@ -103,12 +103,12 @@ def build_probe_subgraph(
             return "bulk_schema_phase"
         return "__end__"
 
-    # def _route_after_verification(
-    #     state: ProbeState,
-    # ) -> Literal["fallback_react_phase", "coverage_validator"]:
-    #     if state.get("pending_hard_fallbacks"):
-    #         return "fallback_react_phase"
-    #     return "coverage_validator"
+    def _route_after_verification(
+        state: ProbeState,
+    ) -> Literal["fallback_react_phase", "coverage_validator"]:
+        if state.get("pending_hard_fallbacks"):
+            return "fallback_react_phase"
+        return "coverage_validator"
 
     def _route_after_fallback(
         state: ProbeState,
@@ -122,7 +122,7 @@ def build_probe_subgraph(
     graph.add_node("planning_agent", partial(planning_agent, cfg=cfg))
     graph.add_node("bulk_schema_phase", partial(bulk_schema_phase, cfg=cfg))
     graph.add_node("verification_phase", partial(verification_phase, cfg=cfg))
-    # graph.add_node("fallback_react_phase", partial(fallback_react_phase, cfg=cfg))
+    graph.add_node("fallback_react_phase", partial(fallback_react_phase, cfg=cfg))
     graph.add_node("coverage_validator", partial(coverage_validator, cfg=cfg))
     graph.add_node("coverage_validation_handler", coverage_validation_handler)
 
@@ -137,20 +137,19 @@ def build_probe_subgraph(
     )
     graph.add_edge("bulk_schema_phase", "verification_phase")
 
-    graph.add_edge("verification_phase", "coverage_validator")
-    # graph.add_conditional_edges(
-    #     "verification_phase",
-    #     _route_after_verification,
-    #     {
-    #         "fallback_react_phase": "fallback_react_phase",
-    #         "coverage_validator": "coverage_validator",
-    #     },
-    # )
-    # graph.add_conditional_edges(
-    #     "fallback_react_phase",
-    #     _route_after_fallback,
-    #     {"coverage_validator": "coverage_validator", END: END},
-    # )
+    graph.add_conditional_edges(
+        "verification_phase",
+        _route_after_verification,
+        {
+            "fallback_react_phase": "fallback_react_phase",
+            "coverage_validator": "coverage_validator",
+        },
+    )
+    graph.add_conditional_edges(
+        "fallback_react_phase",
+        _route_after_fallback,
+        {"coverage_validator": "coverage_validator", END: END},
+    )
     graph.add_edge("coverage_validator", "coverage_validation_handler")
     graph.add_edge("coverage_validation_handler", END)
     return graph.compile()

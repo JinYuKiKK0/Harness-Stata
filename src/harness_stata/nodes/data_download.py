@@ -26,6 +26,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 
 from harness_stata.clients.csmar import get_csmar_tools
+from harness_stata.clients.mcp import call_structured_mcp_tool
 from harness_stata.config import get_settings
 from harness_stata.nodes._writes import awrites_to
 from harness_stata.state import (
@@ -109,13 +110,6 @@ def _require_date_filter(task: DownloadTask, key: str) -> str:
     return value
 
 
-def _coerce_dict(raw: object, context: str) -> dict[str, Any]:
-    if not isinstance(raw, dict):
-        msg = f"{context}: expected dict response, got {type(raw).__name__}"
-        raise RuntimeError(msg)
-    return raw
-
-
 def _extract_validation_id(probe_result: Mapping[str, Any], task: DownloadTask) -> str:
     table = task["table"]
     if probe_result.get("can_materialize") is not True:
@@ -187,18 +181,18 @@ async def data_download(state: WorkflowState) -> DownloadedFiles:
         materialize_tool = by_name[_MATERIALIZE_TOOL_NAME]
 
         for task in manifest["items"]:
-            probe_raw = await probe_tool.ainvoke(_build_probe_payload(task))
-            probe_result = _coerce_dict(
-                probe_raw, f"csmar_probe_query response for table {task['table']}"
+            probe_ctx = f"csmar_probe_query response for table {task['table']}"
+            probe_result = await call_structured_mcp_tool(
+                probe_tool, _build_probe_payload(task), probe_ctx
             )
             validation_id = _extract_validation_id(probe_result, task)
 
             task_dir = _make_task_dir(session_dir, task)
-            mat_raw = await materialize_tool.ainvoke(
-                {"validation_id": validation_id, "output_dir": str(task_dir)}
-            )
-            mat_result = _coerce_dict(
-                mat_raw, f"csmar_materialize_query response for table {task['table']}"
+            mat_ctx = f"csmar_materialize_query response for table {task['table']}"
+            mat_result = await call_structured_mcp_tool(
+                materialize_tool,
+                {"validation_id": validation_id, "output_dir": str(task_dir)},
+                mat_ctx,
             )
             files = _extract_file_paths(mat_result, task)
             collected.extend(_make_downloaded_files(task, files))

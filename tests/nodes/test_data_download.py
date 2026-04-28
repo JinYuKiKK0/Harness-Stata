@@ -10,10 +10,21 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from langchain_core.messages import ToolMessage
+from langchain_mcp_adapters.tools import MCPToolArtifact
 from pytest_mock import MockerFixture
 
 from harness_stata.nodes.data_download import data_download
 from harness_stata.state import DownloadManifest, DownloadTask, WorkflowState
+
+
+def _mcp_response(payload: dict[str, Any]) -> ToolMessage:
+    """Wrap a structured payload the way langchain-mcp-adapters delivers it."""
+    return ToolMessage(
+        content="",
+        tool_call_id="test",
+        artifact=MCPToolArtifact(structured_content=payload),
+    )
 
 # ---------------------------------------------------------------------------
 # Test helpers
@@ -79,9 +90,13 @@ def test_data_download_single_task_success(
     make_download_manifest: Callable[..., DownloadManifest],
 ) -> None:
     _patch_settings(mocker, tmp_path)
-    probe = AsyncMock(return_value={"can_materialize": True, "validation_id": "v1"})
+    probe = AsyncMock(
+        return_value=_mcp_response({"can_materialize": True, "validation_id": "v1"})
+    )
     materialize = AsyncMock(
-        return_value={"files": [str(tmp_path / "a.csv")], "output_dir": str(tmp_path)}
+        return_value=_mcp_response(
+            {"files": [str(tmp_path / "a.csv")], "output_dir": str(tmp_path)}
+        )
     )
     probe_tool, mat_tool = _patch_csmar(mocker, probe=probe, materialize=materialize)
 
@@ -104,14 +119,14 @@ def test_data_download_single_task_success(
         }
     }
     assert probe_tool.ainvoke.call_count == 1
-    probe_payload: dict[str, Any] = probe_tool.ainvoke.call_args.args[0]
+    probe_payload: dict[str, Any] = probe_tool.ainvoke.call_args.args[0]["args"]
     assert probe_payload["table_code"] == "FS_COMBAS"
     assert set(probe_payload["columns"]) == {"SYMBOL", "ACCYEAR", "A001000000", "A002100000"}
     assert probe_payload["start_date"] == "2015-01-01"
     assert probe_payload["end_date"] == "2022-12-31"
     assert probe_payload["condition"] == "Markettype in (1,4)"
     assert mat_tool.ainvoke.call_count == 1
-    mat_payload: dict[str, Any] = mat_tool.ainvoke.call_args.args[0]
+    mat_payload: dict[str, Any] = mat_tool.ainvoke.call_args.args[0]["args"]
     assert mat_payload["validation_id"] == "v1"
     assert mat_payload["output_dir"].startswith(str(tmp_path))
 
@@ -124,14 +139,14 @@ def test_data_download_multi_tasks_success(
     _patch_settings(mocker, tmp_path)
     probe = AsyncMock(
         side_effect=[
-            {"can_materialize": True, "validation_id": "v1"},
-            {"can_materialize": True, "validation_id": "v2"},
+            _mcp_response({"can_materialize": True, "validation_id": "v1"}),
+            _mcp_response({"can_materialize": True, "validation_id": "v2"}),
         ]
     )
     materialize = AsyncMock(
         side_effect=[
-            {"files": [str(tmp_path / "f1.csv")]},
-            {"files": [str(tmp_path / "f2.csv")]},
+            _mcp_response({"files": [str(tmp_path / "f1.csv")]}),
+            _mcp_response({"files": [str(tmp_path / "f2.csv")]}),
         ]
     )
     probe_tool, mat_tool = _patch_csmar(mocker, probe=probe, materialize=materialize)
@@ -158,9 +173,13 @@ def test_data_download_materialize_returns_multi_files(
     make_download_manifest: Callable[..., DownloadManifest],
 ) -> None:
     _patch_settings(mocker, tmp_path)
-    probe = AsyncMock(return_value={"can_materialize": True, "validation_id": "v1"})
+    probe = AsyncMock(
+        return_value=_mcp_response({"can_materialize": True, "validation_id": "v1"})
+    )
     materialize = AsyncMock(
-        return_value={"files": [str(tmp_path / "part1.csv"), str(tmp_path / "part2.csv")]}
+        return_value=_mcp_response(
+            {"files": [str(tmp_path / "part1.csv"), str(tmp_path / "part2.csv")]}
+        )
     )
     _patch_csmar(mocker, probe=probe, materialize=materialize)
 
@@ -188,7 +207,9 @@ def test_data_download_probe_cannot_materialize_raises(
 ) -> None:
     _patch_settings(mocker, tmp_path)
     probe = AsyncMock(
-        return_value={"can_materialize": False, "invalid_columns": ["A001000000"]}
+        return_value=_mcp_response(
+            {"can_materialize": False, "invalid_columns": ["A001000000"]}
+        )
     )
     materialize = AsyncMock()
     _patch_csmar(mocker, probe=probe, materialize=materialize)
@@ -206,7 +227,9 @@ def test_data_download_materialize_raises_propagates(
     make_download_manifest: Callable[..., DownloadManifest],
 ) -> None:
     _patch_settings(mocker, tmp_path)
-    probe = AsyncMock(return_value={"can_materialize": True, "validation_id": "v1"})
+    probe = AsyncMock(
+        return_value=_mcp_response({"can_materialize": True, "validation_id": "v1"})
+    )
     materialize = AsyncMock(side_effect=RuntimeError("network unavailable"))
     probe_tool, mat_tool = _patch_csmar(mocker, probe=probe, materialize=materialize)
 

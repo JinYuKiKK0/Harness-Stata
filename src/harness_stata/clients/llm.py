@@ -21,8 +21,9 @@ def get_chat_model() -> BaseChatModel:
     s = get_settings()
     return ChatOpenAI(
         model=s.llm_model_name,
-        api_key=SecretStr(s.dashscope_api_key),
+        api_key=SecretStr(s.api_key),
         base_url=s.llm_base_url,
         temperature=s.llm_temperature,
-        extra_body={"enable_thinking": False},
+        # extra_body={"enable_thinking": False},
+        extra_body={"chat_template_kwargs":{"thinking":False}}
     )
