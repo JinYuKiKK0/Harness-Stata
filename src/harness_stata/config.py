@@ -20,7 +20,7 @@ ENV_PATH = PROJECT_ROOT / ".env"
 
 @dataclass(frozen=True)
 class Settings:
-    api_key: str
+    llm_api_key: str
     llm_model_name: str
     llm_base_url: str
     llm_temperature: float
@@ -59,9 +59,9 @@ def _parse_positive_int(env: dict[str, str], key: str, *, default: str) -> int:
 def get_settings() -> Settings:
     env = _load_env()
 
-    api_key = env.get("API_KEY", "")
-    if not api_key:
-        msg = "API_KEY 未配置。请在项目根 .env 中设置 API Key。"
+    llm_api_key = env.get("LLM_API_KEY", "")
+    if not llm_api_key:
+        msg = "LLM_API_KEY 未配置。请在项目根 .env 中设置 LLM API Key。"
         raise RuntimeError(msg)
 
     llm_base_url = env.get("LLM_BASE_URL", "")
@@ -127,7 +127,7 @@ def get_settings() -> Settings:
     langsmith_endpoint = env.get("LANGSMITH_ENDPOINT") or None
 
     return Settings(
-        api_key=api_key,
+        llm_api_key=llm_api_key,
         llm_model_name=env.get("LLM_MODEL", "qwen-plus"),
         llm_base_url=llm_base_url,
         llm_temperature=float(env.get("LLM_TEMPERATURE", "0.3")),

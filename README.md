@@ -126,7 +126,6 @@ uv run langgraph dev
 
 ## 开发约定
 
-- 会话开始：运行 `scripts/init.py` 摸清现状，从 `specs/feature_list.json` 选择 `passes:false` 且依赖全绿的 feature。
-- 会话结束：`scripts/check.py` 6/6 全过后翻转 `passes`，更新 `specs/PROGRESS.md`，提交 git。
-- Feature 的结构性变更（id/description/steps/depends_on）需用户确认；`passes` 翻转无需确认。
+- 会话开始：运行 `scripts/init.py` 摸清现状，结合 `specs/PROGRESS.md` 与用户诉求确认目标。
+- 会话结束：`scripts/check.py` 6/6 全过后更新 `specs/PROGRESS.md`，提交 git。
 - 详见 [`CLAUDE.md`](CLAUDE.md)。
