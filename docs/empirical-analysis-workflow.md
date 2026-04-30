@@ -12,7 +12,7 @@
 | --- | ---------------------- | --------- | ------------------------------------------------------------------ |
 | 1   | 需求解析               | 单轮 LLM  | EmpiricalSpec                                                      |
 | 2   | 模型与基准线构建       | 单轮 LLM  | ModelPlan                                                          |
-| 3   | 数据探针               | ReAct LLM | ProbeReport + DownloadManifest                                     |
+| 3   | 数据探针               | LLM 子图 + 代码工具 | ProbeReport + DownloadManifest                                     |
 | 4   | Human In the Loop      | 纯代码    | hitl_decision                                                      |
 | 5   | 数据批量获取           | 纯代码    | DownloadedFiles                                                    |
 | 6   | 数据清洗               | ReAct LLM | MergedDataset                                                      |

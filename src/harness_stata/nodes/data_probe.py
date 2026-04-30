@@ -3,8 +3,7 @@
 Pure-code wrapper around :func:`build_probe_subgraph`. 在节点入口先调用一次
 ``csmar_list_databases`` 把已购数据库清单作为共享上下文注入子图,然后把
 csmar-mcp 的工具按白名单切片,分别交给 Planning 阶段(仅 ``csmar_list_tables``)
-与兜底单变量 ReAct 阶段(``csmar_list_tables`` + ``csmar_bulk_schema`` +
-``csmar_get_table_schema``)。
+与兜底单变量 ReAct 阶段(``csmar_list_tables`` + ``csmar_get_table_schema``)。
 """
 
 from __future__ import annotations

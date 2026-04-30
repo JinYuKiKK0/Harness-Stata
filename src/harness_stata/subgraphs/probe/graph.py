@@ -64,9 +64,9 @@ def build_probe_subgraph(
 
     ``planning_tools`` 是 Planning Agent 在第一阶段可用的工具集(仅
     ``csmar_list_tables``)。``fallback_tools`` 是兜底单变量 ReAct 可用的工具集
-    (``csmar_list_tables`` + ``csmar_bulk_schema`` + ``csmar_get_table_schema``)。
-    ``bulk_schema_tool`` 由代码层在中间环节批量调用,同时也作为 fallback Agent 工具;
-    ``probe_tool`` 仅在 coverage_phase 里使用,不绑给任何 Agent。
+    (``csmar_list_tables`` + ``csmar_get_table_schema``)。
+    ``bulk_schema_tool`` 仅由代码层在中间环节批量调用;``probe_tool`` 仅在
+    coverage_phase 里使用,不绑给任何 Agent。
 
     ``planning_agent_max_calls`` 限制 Planning Agent 一轮内的工具调用次数,
     ``fallback_react_max_calls`` 限制每个兜底单变量 ReAct 的预算。
