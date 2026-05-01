@@ -2,13 +2,18 @@
 
 ## 当前焦点
 
-data_probe 子图弃用 SOFT 替代变量机制:soft 找不到直接记 not_found,不再尝试 substitute 重试。
+data_download 节点过滤 CSMAR 返回的非数据附属文件(如 [DES] 字段字典 .txt),避免污染 downloaded_files.files 导致 data_cleaning 在 DuckDB 登记阶段抛 ValueError。
 
 ## 当前上下文
 
 <!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
-- 本次会话 — 显式弃用 SOFT 替代变量机制,把 data_probe 子图回到一次性单向流水线:
+- 本次会话 — 修复 data_cleaning 因 .txt 字段字典文件而 raise `unsupported source format '.txt'` 的链路缺陷:
+  - 根因:CSMAR `csmar_materialize_query` 把数据 .csv 与同包字段字典 `*[DES][csv].txt` 一起放进 `mat_result["files"]`;`data_download._extract_file_paths` 未做后缀白名单,把字典文件也透传成 `DownloadedFile`;`data_cleaning._register_sources` 仅识别 `.csv/.xlsx/.xls`,撞上 `.txt` 直接 ValueError。
+  - 修复:在 `src/harness_stata/nodes/data_download.py` 增加 `_DATA_FILE_SUFFIXES = {.csv, .xlsx, .xls}` 白名单,`_extract_file_paths` 跳过非数据后缀;若过滤后没有任何数据文件则 RuntimeError(保留硬失败语义)。DES 文件仍留在 task_dir 内,需要时按需读取,但不再混入数据流。
+  - 质量门禁:check.py 的 ruff format / pyright / 文件行数 / 架构漂移失败均为存量问题,与本次改动无关;data_download.py 自身通过。
+
+- 上次会话 — 显式弃用 SOFT 替代变量机制,把 data_probe 子图回到一次性单向流水线:
   - 决策动因:替代变量链路对 LLM 输出与 spec/plan 改写的耦合过深(verification + coverage 两处入口、跨阶段 sub_meta 维护、二次 planning agent 重跑、回写 EmpiricalSpec / ModelPlan),实跑收益远低于复杂度成本。
   - 状态 schema:删除 `SubstitutionTrace`、`VariableProbeResult.substitution_trace`、`VariableProbeResult.status` 中的 `"substituted"` literal。
   - 子图:`ProbeState` 移除 `substitute_meta`/`substitute_queue`/`substitute_round`/`pipeline_initialized`;`build_probe_subgraph` 移除 `substitute_max_rounds` 参数;`coverage_validation_handler` 后无重试回边,直接 END。

@@ -47,6 +47,9 @@ _PROBE_TOOL_NAME = "csmar_probe_query"
 _MATERIALIZE_TOOL_NAME = "csmar_materialize_query"
 _SESSION_TS_FORMAT = "%Y%m%dT%H%M%SZ"
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# CSMAR 下发包内除数据文件外还会携带 [DES] 字段字典 .txt 等附属物，
+# 这里按后缀白名单只保留可被 data_cleaning 登记到 DuckDB 的数据文件。
+_DATA_FILE_SUFFIXES = frozenset({".csv", ".xlsx", ".xls"})
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +144,15 @@ def _extract_file_paths(mat_result: Mapping[str, Any], task: DownloadTask) -> li
                 f"csmar_materialize_query returned non-string file entry for table {task['table']}"
             )
             raise RuntimeError(msg)
+        if Path(entry).suffix.lower() not in _DATA_FILE_SUFFIXES:
+            continue
         paths.append(entry)
+    if not paths:
+        msg = (
+            f"csmar_materialize_query returned no data files (suffix in {sorted(_DATA_FILE_SUFFIXES)!r})"
+            f" for table {task['table']}; got {files!r}"
+        )
+        raise RuntimeError(msg)
     return paths
 
 
