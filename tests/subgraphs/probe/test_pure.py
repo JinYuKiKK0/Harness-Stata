@@ -10,12 +10,16 @@ Coverage scope follows CLAUDE.md test conventions:
 
 from __future__ import annotations
 
-from harness_stata.state import VariableDefinition
+from harness_stata.state import EmpiricalSpec, VariableDefinition
 from harness_stata.subgraphs.probe.pure import (
     BucketKey,
     bucket_plans,
+    build_probe_query_payload,
+    ensure_manifest,
+    finding_mapping_failure_reason,
     format_schema_for_prompt,
     merge_bucket_results,
+    merge_into_manifest,
     normalize_time_bound,
     parse_bulk_schema_response,
     parse_probe_query_response,
@@ -24,6 +28,7 @@ from harness_stata.subgraphs.probe.schemas import (
     BucketVariableFinding,
     BucketVerificationOutput,
     VariablePlan,
+    VariableProbeFindingModel,
 )
 
 
@@ -39,6 +44,18 @@ def _var(
         description=description or f"desc of {name}",
         contract_type=contract,  # type: ignore[typeddict-item]
         role=role,  # type: ignore[typeddict-item]
+    )
+
+
+def _spec(variables: list[VariableDefinition]) -> EmpiricalSpec:
+    return EmpiricalSpec(
+        topic="t",
+        variables=variables,
+        sample_scope="A股上市公司",
+        time_range_start="2010",
+        time_range_end="2020",
+        data_frequency="yearly",
+        analysis_granularity="公司-年度",
     )
 
 
@@ -229,8 +246,8 @@ class TestMergeBucketResults:
     def test_first_valid_found_wins(self) -> None:
         roa = _var("ROA")
         schema_dict = {
-            "T1": [{"field_code": "ROA"}],
-            "T2": [{"field_code": "ROA"}],
+            "T1": [{"field_code": "Stkcd"}, {"field_code": "ROA"}],
+            "T2": [{"field_code": "Stkcd"}, {"field_code": "ROA"}],
         }
         bucket_outputs = [
             (
@@ -287,6 +304,223 @@ class TestMergeBucketResults:
         results = merge_bucket_results(bucket_outputs, [roa], schema_dict)
         assert results[0][1].status == "not_found"
 
+    def test_derived_source_field_valid_counts_as_found(self) -> None:
+        age = _var("Age", description="企业年龄")
+        schema_dict = {
+            "T1": [
+                {"field_code": "Stkcd"},
+                {"field_code": "AccYear"},
+                {"field_code": "EstablishDate"},
+            ]
+        }
+        bucket_outputs = [
+            (
+                BucketKey("DB", "T1"),
+                BucketVerificationOutput(
+                    results=[
+                        BucketVariableFinding(
+                            variable_name="Age",
+                            status="found",
+                            field="EstablishDate",
+                            source_fields=["EstablishDate"],
+                            match_kind="derived",
+                            transform={"op": "firm_age", "date_field": "EstablishDate"},
+                            key_fields=["Stkcd", "AccYear"],
+                            evidence="企业年龄可由成立日期和样本年份构造",
+                        )
+                    ]
+                ),
+            )
+        ]
+        results = merge_bucket_results(bucket_outputs, [age], schema_dict)
+        _, finding = results[0]
+        assert finding.status == "found"
+        assert finding.match_kind == "derived"
+        assert finding.source_fields == ["EstablishDate"]
+        assert finding.field == "EstablishDate"
+        assert finding.transform == {"op": "firm_age", "date_field": "EstablishDate"}
+
+    def test_invalid_source_field_drops_to_not_found(self) -> None:
+        age = _var("Age", description="企业年龄")
+        schema_dict = {"T1": [{"field_code": "Stkcd"}, {"field_code": "AccYear"}]}
+        bucket_outputs = [
+            (
+                BucketKey("DB", "T1"),
+                BucketVerificationOutput(
+                    results=[
+                        BucketVariableFinding(
+                            variable_name="Age",
+                            status="found",
+                            field="EstablishDate",
+                            source_fields=["EstablishDate"],
+                            match_kind="derived",
+                            transform={"op": "firm_age", "date_field": "EstablishDate"},
+                            key_fields=["Stkcd", "AccYear"],
+                        )
+                    ]
+                ),
+            )
+        ]
+        results = merge_bucket_results(bucket_outputs, [age], schema_dict)
+        assert results[0][1].status == "not_found"
+
+    def test_invalid_key_field_drops_to_not_found(self) -> None:
+        roa = _var("ROA")
+        schema_dict = {"T1": [{"field_code": "Stkcd"}, {"field_code": "ROA"}]}
+        bucket_outputs = [
+            (
+                BucketKey("DB", "T1"),
+                BucketVerificationOutput(
+                    results=[
+                        BucketVariableFinding(
+                            variable_name="ROA",
+                            status="found",
+                            field="ROA",
+                            source_fields=["ROA"],
+                            match_kind="direct_field",
+                            transform={"op": "pass_through"},
+                            key_fields=["FakeKey"],
+                        )
+                    ]
+                ),
+            )
+        ]
+        results = merge_bucket_results(bucket_outputs, [roa], schema_dict)
+        assert results[0][1].status == "not_found"
+
+    def test_transform_reference_outside_source_fields_drops_to_not_found(self) -> None:
+        age = _var("Age", description="企业年龄")
+        schema_dict = {
+            "T1": [{"field_code": "Stkcd"}, {"field_code": "EstablishDate"}]
+        }
+        bucket_outputs = [
+            (
+                BucketKey("DB", "T1"),
+                BucketVerificationOutput(
+                    results=[
+                        BucketVariableFinding(
+                            variable_name="Age",
+                            status="found",
+                            field="EstablishDate",
+                            source_fields=["EstablishDate"],
+                            match_kind="derived",
+                            transform={"op": "firm_age", "date_field": "FakeDate"},
+                            key_fields=["Stkcd"],
+                        )
+                    ]
+                ),
+            )
+        ]
+        results = merge_bucket_results(bucket_outputs, [age], schema_dict)
+        assert results[0][1].status == "not_found"
+
+
+# ---------------------------------------------------------------------------
+# manifest + probe payload
+# ---------------------------------------------------------------------------
+
+
+class TestManifestAndProbePayload:
+    def test_manifest_merges_source_fields_and_variable_mappings(self) -> None:
+        age = _var("Age", description="企业年龄")
+        cashflow = _var("CashFlow", description="经营活动现金流净额与总资产之比")
+        manifest = ensure_manifest(None)
+        spec = _spec([age, cashflow])
+
+        merge_into_manifest(
+            manifest,
+            age,
+            VariableProbeFindingModel(
+                status="found",
+                database="CSMAR",
+                table="T1",
+                field="EstablishDate",
+                source_fields=["EstablishDate"],
+                match_kind="derived",
+                transform={"op": "firm_age", "date_field": "EstablishDate"},
+                key_fields=["Stkcd", "AccYear"],
+                evidence="企业年龄可由成立日期构造",
+            ),
+            spec,
+        )
+        merge_into_manifest(
+            manifest,
+            cashflow,
+            VariableProbeFindingModel(
+                status="found",
+                database="CSMAR",
+                table="T1",
+                field="CashRecoveryRate",
+                source_fields=["CashRecoveryRate"],
+                match_kind="semantic_equivalent",
+                transform={"op": "pass_through"},
+                key_fields=["Stkcd", "AccYear"],
+                evidence="字段定义与经营现金流/总资产口径一致",
+            ),
+            spec,
+        )
+
+        assert len(manifest["items"]) == 1
+        task = manifest["items"][0]
+        assert task["variable_fields"] == ["EstablishDate", "CashRecoveryRate"]
+        assert task["variable_names"] == ["Age", "CashFlow"]
+        assert task["key_fields"] == ["Stkcd", "AccYear"]
+        assert task["filters"] == {"start_date": "2010-01-01", "end_date": "2020-12-31"}
+        assert task["variable_mappings"] == [
+            {
+                "variable_name": "Age",
+                "source_fields": ["EstablishDate"],
+                "match_kind": "derived",
+                "transform": {"op": "firm_age", "date_field": "EstablishDate"},
+                "evidence": "企业年龄可由成立日期构造",
+            },
+            {
+                "variable_name": "CashFlow",
+                "source_fields": ["CashRecoveryRate"],
+                "match_kind": "semantic_equivalent",
+                "transform": {"op": "pass_through"},
+                "evidence": "字段定义与经营现金流/总资产口径一致",
+            },
+        ]
+
+    def test_probe_payload_contains_key_and_source_fields(self) -> None:
+        spec = _spec([_var("Age")])
+        finding = VariableProbeFindingModel(
+            status="found",
+            database="CSMAR",
+            table="T1",
+            field="EstablishDate",
+            source_fields=["EstablishDate"],
+            match_kind="derived",
+            transform={"op": "firm_age", "date_field": "EstablishDate"},
+            key_fields=["Stkcd", "AccYear"],
+        )
+
+        payload = build_probe_query_payload(spec, finding)
+
+        assert payload["table_code"] == "T1"
+        assert payload["columns"] == ["Stkcd", "AccYear", "EstablishDate"]
+        assert payload["start_date"] == "2010-01-01"
+        assert payload["end_date"] == "2020-12-31"
+
+    def test_finding_mapping_failure_reason_rejects_bad_transform_reference(self) -> None:
+        finding = VariableProbeFindingModel(
+            status="found",
+            database="CSMAR",
+            table="T1",
+            field="EstablishDate",
+            source_fields=["EstablishDate"],
+            match_kind="derived",
+            transform={"op": "firm_age", "date_field": "FakeDate"},
+            key_fields=["Stkcd"],
+        )
+
+        reason = finding_mapping_failure_reason(finding)
+
+        assert reason is not None
+        assert "unusable transform" in reason
+
+
 # ---------------------------------------------------------------------------
 # format_schema_for_prompt
 # ---------------------------------------------------------------------------
@@ -297,13 +531,19 @@ class TestFormatSchemaForPrompt:
         block = format_schema_for_prompt(
             "T1",
             [
-                {"field_code": "Stkcd", "field_label": "证券代码"},
+                {"field_code": "Stkcd", "field_label": "证券代码", "field_key": "Code"},
+                {"field_code": "Trddt", "field_label": "交易日期", "field_key": "Date"},
                 {"field_code": "ROA", "field_label": None},
                 {"field_code": ""},  # 空 field_code 应被跳过
             ],
         )
-        assert "Table `T1` (3 fields)" in block
-        assert "- `Stkcd` — 证券代码" in block
-        assert "- `ROA`" in block
-        # 空 field_code 那行被跳过
-        assert block.count("- `") == 2
+        # 标题 N 是渲染后行数,空 field_code 被跳过 → 3 行
+        assert "### Table `T1` (3 fields)" in block
+        assert "| code | label | key |" in block
+        assert "| --- | --- | --- |" in block
+        assert "| Stkcd | 证券代码 | Code |" in block
+        assert "| Trddt | 交易日期 | Date |" in block
+        # field_label / field_key 缺失时渲染为空 cell
+        assert "| ROA |  |  |" in block
+        # 数据行恰好 3 条(空 field_code 跳过);整块共 5 行 pipe 行 = header + sep + 3 数据
+        assert block.count("\n| ") == 5

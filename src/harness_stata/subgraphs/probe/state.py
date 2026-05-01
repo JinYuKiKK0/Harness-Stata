@@ -29,5 +29,6 @@ class ProbeState(TypedDict, total=False):
     available_databases: str
     plans: list[VariablePlan]
     schema_dict: dict[str, list[dict[str, Any]]]
+    table_names: dict[str, str]
     pending_hard_fallbacks: list[VariableDefinition]
     validation_queue: list[PendingValidation]

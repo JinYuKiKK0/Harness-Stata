@@ -20,6 +20,7 @@ from harness_stata.subgraphs.probe.pure import (
     build_probe_query_payload,
     ensure_manifest,
     ensure_report,
+    finding_mapping_failure_reason,
     merge_into_manifest,
     parse_probe_query_response,
 )
@@ -36,9 +37,19 @@ async def coverage_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[str, A
     for pending in validation_queue:
         current = pending["variable"]
         finding = pending["finding"]
-        payload = build_probe_query_payload(spec, finding)
         ctx = f"coverage check for variable '{current['name']}' on table {finding.table!r}"
-        outcome = await run_probe_coverage(cfg.probe_tool, payload, ctx)
+        mapping_failure = finding_mapping_failure_reason(finding)
+        if mapping_failure is not None:
+            outcome = CoverageOutcome(
+                can_materialize=False,
+                invalid_columns=[],
+                validation_id=None,
+                row_count=None,
+                failure_reason=f"{ctx}: {mapping_failure}",
+            )
+        else:
+            payload = build_probe_query_payload(spec, finding)
+            outcome = await run_probe_coverage(cfg.probe_tool, payload, ctx)
 
         if outcome["can_materialize"]:
             report["variable_results"].append(

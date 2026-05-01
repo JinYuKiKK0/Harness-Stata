@@ -84,7 +84,19 @@ def _format_variable_source(probe: VariableProbeResult | None) -> str:
     source = probe["source"]
     if source is None:
         return "N/A"
-    return f"{source['database']}.{source['table']}.{source['field']}"
+    source_fields = probe.get("source_fields") or [source["field"]]
+    field_part = "+".join(source_fields)
+    base = f"{source['database']}.{source['table']}.{field_part}"
+    details: list[str] = []
+    match_kind = probe.get("match_kind")
+    if match_kind and match_kind != "direct_field":
+        details.append(match_kind)
+    evidence = probe.get("evidence")
+    if evidence:
+        details.append(f"依据: {evidence}")
+    if not details:
+        return base
+    return f"{base} ({'; '.join(details)})"
 
 
 def _format_variables_table(

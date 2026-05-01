@@ -30,6 +30,7 @@ async def verification_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[st
     plans = list(state.get("plans") or [])
     variables = list(state["empirical_spec"]["variables"])
     schema_dict = dict(state.get("schema_dict") or {})
+    table_names = dict(state.get("table_names") or {})
     validation_queue = list(state.get("validation_queue") or [])
     report = ensure_report(state.get("probe_report"))
     manifest = ensure_manifest(state.get("download_manifest"))
@@ -55,7 +56,7 @@ async def verification_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[st
             unplanned_names.add(name)
 
     # 并发调LLM跑分桶
-    bucket_outputs = await _run_verification_buckets(buckets, schema_dict, cfg)
+    bucket_outputs = await _run_verification_buckets(buckets, schema_dict, table_names, cfg)
     merged = merge_bucket_results(bucket_outputs, variables, schema_dict)
 
     merged_names = {v["name"] for v, _ in merged}
@@ -89,6 +90,7 @@ async def verification_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[st
 async def _run_verification_buckets(
     buckets: dict[BucketKey, list[VariableDefinition]],
     schema_dict: dict[str, list[dict[str, Any]]],
+    table_names: dict[str, str],
     cfg: ProbeNodeConfig,
 ) -> list[tuple[BucketKey, BucketVerificationOutput]]:
     chat = get_chat_model().with_structured_output(
@@ -105,9 +107,13 @@ async def _run_verification_buckets(
             f" role={v['role']}, description={v['description']}"
             for v in vars_in_bucket
         ]
+        table_name = table_names.get(bucket_key.table)
+        table_label = (
+            f"`{bucket_key.table}` ({table_name})" if table_name else f"`{bucket_key.table}`"
+        )
         human = HumanMessage(
             content=(
-                f"Bucket: database=`{bucket_key.database}`, table=`{bucket_key.table}`\n\n"
+                f"Bucket: database=`{bucket_key.database}`, table={table_label}\n\n"
                 f"{schema_block}\n\n"
                 f"Variables to judge ({len(vars_in_bucket)} total):\n" + "\n".join(var_lines)
             )

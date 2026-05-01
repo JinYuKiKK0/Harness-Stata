@@ -19,14 +19,16 @@ from __future__ import annotations
 
 import calendar
 import re
-from typing import Any, NamedTuple, TypedDict
+from typing import Any, NamedTuple, TypedDict, cast
 
 from harness_stata.state import (
     DownloadManifest,
     DownloadTask,
     EmpiricalSpec,
+    ProbeMatchKind,
     ProbeReport,
     VariableDefinition,
+    VariableMapping,
     VariableProbeResult,
     VariableSource,
 )
@@ -53,6 +55,14 @@ class CoverageOutcome(TypedDict):
     validation_id: str | None
     row_count: int | None
     failure_reason: str | None
+
+
+_MATCH_KINDS: set[ProbeMatchKind] = {
+    "direct_field",
+    "semantic_equivalent",
+    "derived",
+}
+_DERIVED_OPS = frozenset({"firm_age", "ratio", "log"})
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +125,7 @@ class BucketKey(NamedTuple):
 
 class BulkSchemaResult(NamedTuple):
     schema_dict: dict[str, list[dict[str, Any]]]
+    table_names: dict[str, str]
     failed_table_codes: list[str]
 
 
@@ -130,12 +141,17 @@ def parse_bulk_schema_response(raw: object) -> BulkSchemaResult:
     moved to ``failed_table_codes``;调用方据此从候选清单中剔除。
     """
     schema_dict: dict[str, list[dict[str, Any]]] = {}
+    table_names: dict[str, str] = {}
     failed: list[str] = []
     if not isinstance(raw, dict):
-        return BulkSchemaResult(schema_dict=schema_dict, failed_table_codes=failed)
+        return BulkSchemaResult(
+            schema_dict=schema_dict, table_names=table_names, failed_table_codes=failed
+        )
     items = raw.get("items")
     if not isinstance(items, list):
-        return BulkSchemaResult(schema_dict=schema_dict, failed_table_codes=failed)
+        return BulkSchemaResult(
+            schema_dict=schema_dict, table_names=table_names, failed_table_codes=failed
+        )
 
     for item in items:
         if not isinstance(item, dict):
@@ -149,21 +165,42 @@ def parse_bulk_schema_response(raw: object) -> BulkSchemaResult:
             continue
         fields: list[dict[str, Any]] = [f for f in fields_raw if isinstance(f, dict)]
         schema_dict[table_code] = fields
+        name = _str_or_empty(item.get("table_name"))
+        if name:
+            table_names[table_code] = name
 
-    return BulkSchemaResult(schema_dict=schema_dict, failed_table_codes=failed)
+    return BulkSchemaResult(
+        schema_dict=schema_dict, table_names=table_names, failed_table_codes=failed
+    )
 
 
 def format_schema_for_prompt(table_code: str, fields: list[dict[str, Any]]) -> str:
-    """Render a single table's schema as a compact markdown block for prompts."""
-    lines = [f"### Table `{table_code}` ({len(fields)} fields)"]
+    """Render a single table's schema as a compact markdown pipe table for prompts.
+
+    渲染 3 列: ``code | label | key``。``key`` 取自 CSMAR 上游 ``field_key``
+    (典型值 ``Code`` = 主键, ``Date`` = 时间维),空值留空。
+    标题里的 N 是渲染后实际行数,不是入参 fields 的原始长度。
+    """
+    rows: list[str] = []
     for f in fields:
-        name = f.get("field_code") or ""
-        if not name:
+        code = _str_or_empty(f.get("field_code"))
+        if not code:
             continue
-        label = f.get("field_label") or ""
-        suffix = f" — {label}" if label else ""
-        lines.append(f"- `{name}`{suffix}")
-    return "\n".join(lines)
+        label = _cell(f.get("field_label"))
+        key = _cell(f.get("field_key"))
+        rows.append(f"| {code} | {label} | {key} |")
+    header = [
+        f"### Table `{table_code}` ({len(rows)} fields)",
+        "| code | label | key |",
+        "| --- | --- | --- |",
+    ]
+    return "\n".join(header + rows)
+
+
+def _cell(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.replace("|", "\\|").replace("\n", " ").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -241,22 +278,140 @@ def _pick_first_valid_found(
     schema_dict: dict[str, list[dict[str, Any]]],
 ) -> VariableProbeFindingModel | None:
     for bucket_key, finding in bucket_findings:
-        if finding.status != "found" or not finding.field:
+        if finding.status != "found":
             continue
         schema = schema_dict.get(bucket_key.table, [])
-        valid_fields = {
-            f["field_code"].strip() for f in schema if isinstance(f.get("field_code"), str)
-        }
-        if finding.field.strip() not in valid_fields:
+        normalized = _normalize_bucket_found(bucket_key, finding, schema)
+        if normalized is None:
             continue
-        return VariableProbeFindingModel(
-            status="found",
-            database=bucket_key.database,
-            table=bucket_key.table,
-            field=finding.field.strip(),
-            key_fields=list(finding.key_fields or []) or None,
-            filters=dict(finding.filters or {}) or None,
+        return normalized
+    return None
+
+
+def _normalize_bucket_found(
+    bucket_key: BucketKey,
+    finding: BucketVariableFinding,
+    schema: list[dict[str, Any]],
+) -> VariableProbeFindingModel | None:
+    valid_fields = _valid_schema_fields(schema)
+    source_fields = _source_fields_for_finding(finding)
+    if not source_fields or any(field not in valid_fields for field in source_fields):
+        return None
+
+    key_fields = _key_fields_for_finding(finding)
+    if any(field not in valid_fields for field in key_fields):
+        return None
+
+    match_kind = _match_kind_for_finding(finding)
+    transform = _transform_for_finding(finding)
+    if not _transform_is_usable(match_kind, transform, source_fields):
+        return None
+
+    return VariableProbeFindingModel(
+        status="found",
+        database=bucket_key.database,
+        table=bucket_key.table,
+        field=source_fields[0],
+        match_kind=match_kind,
+        source_fields=source_fields,
+        transform=transform,
+        evidence=finding.evidence,
+        key_fields=key_fields or None,
+        filters=dict(finding.filters or {}) or None,
+    )
+
+
+def _valid_schema_fields(schema: list[dict[str, Any]]) -> set[str]:
+    return {
+        code.strip()
+        for f in schema
+        if isinstance(code := f.get("field_code"), str) and code.strip()
+    }
+
+
+def _dedupe_nonempty(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(v.strip() for v in values if v.strip()))
+
+
+def _source_fields_for_finding(
+    finding: BucketVariableFinding | VariableProbeFindingModel,
+) -> list[str]:
+    raw_fields = list(finding.source_fields or [])
+    if not raw_fields and finding.field:
+        raw_fields.append(finding.field)
+    return _dedupe_nonempty(raw_fields)
+
+
+def _key_fields_for_finding(
+    finding: BucketVariableFinding | VariableProbeFindingModel,
+) -> list[str]:
+    return _dedupe_nonempty(list(finding.key_fields or []))
+
+
+def _match_kind_for_finding(
+    finding: BucketVariableFinding | VariableProbeFindingModel,
+) -> ProbeMatchKind:
+    match_kind = finding.match_kind or "direct_field"
+    if match_kind in _MATCH_KINDS:
+        return match_kind
+    return "direct_field"
+
+
+def _transform_for_finding(
+    finding: BucketVariableFinding | VariableProbeFindingModel,
+) -> dict[str, object] | None:
+    if isinstance(finding.transform, dict) and finding.transform:
+        return dict(finding.transform)
+    if _match_kind_for_finding(finding) in {"direct_field", "semantic_equivalent"}:
+        return {"op": "pass_through"}
+    return None
+
+
+def _transform_is_usable(
+    match_kind: ProbeMatchKind,
+    transform: dict[str, object] | None,
+    source_fields: list[str],
+) -> bool:
+    if match_kind in {"direct_field", "semantic_equivalent"}:
+        return transform is None or transform.get("op") == "pass_through"
+    if transform is None:
+        return False
+    op = transform.get("op")
+    if not isinstance(op, str) or op not in _DERIVED_OPS:
+        return False
+    sources = set(source_fields)
+    if op == "firm_age":
+        date_field = transform.get("date_field")
+        return isinstance(date_field, str) and date_field in sources
+    if op == "ratio":
+        numerator = transform.get("numerator")
+        denominator = transform.get("denominator")
+        return (
+            isinstance(numerator, str)
+            and numerator in sources
+            and isinstance(denominator, str)
+            and denominator in sources
         )
+    if op == "log":
+        field = transform.get("field")
+        return isinstance(field, str) and field in sources
+    return False
+
+
+def finding_mapping_failure_reason(finding: VariableProbeFindingModel) -> str | None:
+    """Return why a found finding cannot be safely mapped, or None if usable.
+
+    Verification findings are normalized against schema before reaching coverage.
+    Fallback findings come directly from a ReAct agent, so coverage calls this
+    guard before asking CSMAR to validate raw columns.
+    """
+    source_fields = _source_fields_for_finding(finding)
+    if not source_fields:
+        return "found finding has no source_fields or field"
+    match_kind = _match_kind_for_finding(finding)
+    transform = _transform_for_finding(finding)
+    if not _transform_is_usable(match_kind, transform, source_fields):
+        return f"unusable transform for match_kind={match_kind!r}"
     return None
 
 
@@ -276,12 +431,44 @@ def ensure_report(existing: ProbeReport | None) -> ProbeReport:
     )
 
 
+def _copy_variable_mappings(raw: object) -> list[VariableMapping]:
+    if not isinstance(raw, list):
+        return []
+    copied: list[VariableMapping] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        variable_name = item.get("variable_name")
+        source_fields = item.get("source_fields")
+        match_kind = item.get("match_kind")
+        if (
+            not isinstance(variable_name, str)
+            or not isinstance(source_fields, list)
+            or match_kind not in _MATCH_KINDS
+        ):
+            continue
+        transform = item.get("transform")
+        typed_match_kind = cast(ProbeMatchKind, match_kind)
+        mapping = VariableMapping(
+            variable_name=variable_name,
+            source_fields=[f for f in source_fields if isinstance(f, str)],
+            match_kind=typed_match_kind,
+            transform=dict(transform) if isinstance(transform, dict) else None,
+        )
+        evidence = item.get("evidence")
+        if evidence is None or isinstance(evidence, str):
+            mapping["evidence"] = evidence
+        copied.append(mapping)
+    return copied
+
+
 def ensure_manifest(existing: DownloadManifest | None) -> DownloadManifest:
     """Return a fresh DownloadManifest, defensively deep-copying any prior tasks."""
     if existing is None:
         return DownloadManifest(items=[])
-    items: list[DownloadTask] = [
-        DownloadTask(
+    items: list[DownloadTask] = []
+    for item in existing["items"]:
+        copied = DownloadTask(
             database=item["database"],
             table=item["table"],
             key_fields=list(item["key_fields"]),
@@ -289,9 +476,36 @@ def ensure_manifest(existing: DownloadManifest | None) -> DownloadManifest:
             variable_names=list(item["variable_names"]),
             filters=dict(item["filters"]),
         )
-        for item in existing["items"]
-    ]
+        mappings = _copy_variable_mappings(item.get("variable_mappings"))
+        if mappings:
+            copied["variable_mappings"] = mappings
+        items.append(copied)
     return DownloadManifest(items=items)
+
+
+def _build_variable_mapping(
+    var: VariableDefinition,
+    finding: VariableProbeFindingModel,
+) -> VariableMapping:
+    mapping = VariableMapping(
+        variable_name=var["name"],
+        source_fields=_source_fields_for_finding(finding),
+        match_kind=_match_kind_for_finding(finding),
+        transform=_transform_for_finding(finding),
+    )
+    mapping["evidence"] = finding.evidence
+    return mapping
+
+
+def _upsert_variable_mapping(task: DownloadTask, mapping: VariableMapping) -> None:
+    mappings = _copy_variable_mappings(task.get("variable_mappings"))
+    for idx, existing in enumerate(mappings):
+        if existing["variable_name"] == mapping["variable_name"]:
+            mappings[idx] = mapping
+            task["variable_mappings"] = mappings
+            return
+    mappings.append(mapping)
+    task["variable_mappings"] = mappings
 
 
 def build_found_result(
@@ -300,16 +514,22 @@ def build_found_result(
     *,
     record_count: int | None,
 ) -> VariableProbeResult:
-    return VariableProbeResult(
+    source_fields = _source_fields_for_finding(finding)
+    result = VariableProbeResult(
         variable_name=var["name"],
         status="found",
         source=VariableSource(
             database=finding.database or "",
             table=finding.table or "",
-            field=finding.field or "",
+            field=source_fields[0] if source_fields else finding.field or "",
         ),
         record_count=record_count,
     )
+    result["match_kind"] = _match_kind_for_finding(finding)
+    result["source_fields"] = source_fields
+    result["transform"] = _transform_for_finding(finding)
+    result["evidence"] = finding.evidence
+    return result
 
 
 def build_not_found_result(variable_name: str) -> VariableProbeResult:
@@ -330,15 +550,17 @@ def merge_into_manifest(
     """Append a new DownloadTask or merge into an existing one by (database, table)."""
     database = finding.database or ""
     table = finding.table or ""
-    field = finding.field or ""
     var_name = current["name"]
-    key_fields = list(finding.key_fields or [])
+    source_fields = _source_fields_for_finding(finding)
+    key_fields = _key_fields_for_finding(finding)
     filters_typed = build_download_filters(spec, finding.filters)
+    mapping = _build_variable_mapping(current, finding)
 
     for item in manifest["items"]:
         if item["database"] == database and item["table"] == table:
-            if field and field not in item["variable_fields"]:
-                item["variable_fields"].append(field)
+            for field in source_fields:
+                if field not in item["variable_fields"]:
+                    item["variable_fields"].append(field)
             if var_name and var_name not in item["variable_names"]:
                 item["variable_names"].append(var_name)
             for kf in key_fields:
@@ -346,18 +568,19 @@ def merge_into_manifest(
                     item["key_fields"].append(kf)
             for k, v in filters_typed.items():
                 item["filters"][k] = v
+            _upsert_variable_mapping(item, mapping)
             return
 
-    manifest["items"].append(
-        DownloadTask(
-            database=database,
-            table=table,
-            key_fields=key_fields,
-            variable_fields=[field] if field else [],
-            variable_names=[var_name] if var_name else [],
-            filters=filters_typed,
-        )
+    task = DownloadTask(
+        database=database,
+        table=table,
+        key_fields=key_fields,
+        variable_fields=source_fields,
+        variable_names=[var_name] if var_name else [],
+        filters=filters_typed,
     )
+    task["variable_mappings"] = [mapping]
+    manifest["items"].append(task)
 
 
 # ---------------------------------------------------------------------------
@@ -370,14 +593,14 @@ def build_probe_query_payload(
 ) -> dict[str, object]:
     """Produce the kwargs for ``csmar_probe_query`` from a finding + spec.
 
-    ``columns`` 合并 finding 的 key_fields 与 field,顺序保留并去重。
+    ``columns`` 合并 finding 的 key_fields 与 source_fields,顺序保留并去重。
     时间范围由 spec 推导,condition 走 finding.filters.condition(若有)。
     """
     table_code = finding.table or ""
-    field = finding.field or ""
-    columns_raw: list[str] = list(finding.key_fields or [])
-    if field and field not in columns_raw:
-        columns_raw.append(field)
+    columns_raw: list[str] = _key_fields_for_finding(finding)
+    for field in _source_fields_for_finding(finding):
+        if field not in columns_raw:
+            columns_raw.append(field)
     columns = list(dict.fromkeys(columns_raw))
 
     payload: dict[str, object] = {

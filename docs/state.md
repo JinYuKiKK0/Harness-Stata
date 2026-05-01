@@ -77,6 +77,20 @@
 | table    | str  | 表名       |
 | field    | str  | 字段名     |
 
+**ProbeMatchKind**
+
+`"direct_field" | "semantic_equivalent" | "derived"`。数据探针里的 `found` 表示变量可直接取得、可由语义等价字段取得，或可由确定性规则构造，不再限定为数据库存在同名字段。
+
+**VariableMapping**
+
+| 字段          | 类型                                      | 说明 |
+| ------------- | ----------------------------------------- | ---- |
+| variable_name | str                                       | EmpiricalSpec 中的目标变量名 |
+| source_fields | list[str]                                 | 下载所需的 CSMAR 原料字段；必须来自 schema/tool 返回 |
+| match_kind    | ProbeMatchKind                            | 变量可得性类型 |
+| transform     | dict \| None                              | 构造规则；直接/语义等价通常为 `{"op":"pass_through"}` |
+| evidence      | str \| None                               | 探针判定依据，供调试与 HITL 展示 |
+
 #### EmpiricalSpec
 
 由需求解析节点写入。
@@ -129,9 +143,13 @@
 | 字段               | 类型                                                                               | 说明          |
 | ------------------ | ---------------------------------------------------------------------------------- | ------------- |
 | variable_name      | str                                                                                | 变量名        |
-| status             | "found" \| "not_found"                                                             | 可得性状态    |
+| status             | "found" \| "not_found"                                                             | 可得性状态；found = 可直接取得或可确定性构造 |
 | source             | {database: str, table: str, field: str} \| None                                    | 数据来源定位  |
 | record_count       | int \| None                                                                        | 记录计数      |
+| match_kind          | ProbeMatchKind \| None                                                             | 命中类型      |
+| source_fields      | list[str]                                                                          | 原料字段清单  |
+| transform           | dict \| None                                                                       | 构造规则      |
+| evidence            | str \| None                                                                        | 判定依据      |
 
 #### DownloadManifest
 
@@ -148,8 +166,9 @@
 | database        | str       | 目标数据库                                  |
 | table           | str       | 目标表                                      |
 | key_fields      | list[str] | 主键/时间键字段（探针下钻 schema 后确定）   |
-| variable_fields | list[str] | 变量字段                                    |
-| variable_names  | list[str] | 对应的变量名（与 variable_fields 一一对应） |
+| variable_fields   | list[str]              | 需要下载的原料字段（含直接字段、语义等价字段、派生变量原料字段） |
+| variable_names    | list[str]              | 该任务覆盖的目标变量名；不要求与 variable_fields 一一对应 |
+| variable_mappings | list[VariableMapping]  | 每个目标变量到原料字段和 transform 的映射 |
 | filters         | dict      | 严格过滤条件：必含 `start_date` / `end_date`（`YYYY-MM-DD`），可选 `condition` |
 
 #### hitl_decision
@@ -179,6 +198,7 @@
 | source_table   | str       | 来源表(复制自对应 DownloadTask.table)                   |
 | key_fields     | list[str] | 从 DownloadTask 继承的主键/时间键字段                    |
 | variable_names | list[str] | 该 DownloadTask 声明的变量名(同一 task 拆分出的多个文件共享此列表,不做跨文件字段拆分;下游 F20 data_cleaning 负责跨文件拼接) |
+| variable_mappings | list[VariableMapping] | 从 DownloadTask 继承的变量映射；data_cleaning 按此执行 pass_through / firm_age / ratio / log 等确定性变换 |
 
 #### MergedDataset
 

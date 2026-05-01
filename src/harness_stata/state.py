@@ -8,7 +8,7 @@ WorkflowState composes them flatly with incremental population semantics
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 # ---------------------------------------------------------------------------
 # Shared types
@@ -46,11 +46,26 @@ class VariableSource(TypedDict):
     field: str
 
 
+ProbeMatchKind = Literal["direct_field", "semantic_equivalent", "derived"]
+
+
+class VariableMapping(TypedDict):
+    variable_name: str
+    source_fields: list[str]
+    match_kind: ProbeMatchKind
+    transform: dict[str, object] | None
+    evidence: NotRequired[str | None]
+
+
 class VariableProbeResult(TypedDict):
     variable_name: str
     status: Literal["found", "not_found"]
     source: VariableSource | None
     record_count: int | None
+    match_kind: NotRequired[ProbeMatchKind | None]
+    source_fields: NotRequired[list[str]]
+    transform: NotRequired[dict[str, object] | None]
+    evidence: NotRequired[str | None]
 
 
 class DownloadTask(TypedDict):
@@ -59,6 +74,7 @@ class DownloadTask(TypedDict):
     key_fields: list[str]
     variable_fields: list[str]
     variable_names: list[str]
+    variable_mappings: NotRequired[list[VariableMapping]]
     filters: dict[str, object]
 
 
@@ -67,6 +83,7 @@ class DownloadedFile(TypedDict):
     source_table: str
     key_fields: list[str]
     variable_names: list[str]
+    variable_mappings: NotRequired[list[VariableMapping]]
 
 
 class SignCheck(TypedDict):

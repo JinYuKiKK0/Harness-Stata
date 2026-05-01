@@ -118,14 +118,15 @@ probe_subgraph START
 | bulk_schema_phase             | 纯代码 + 工具  | 收集所有候选 table_code 跨变量去重，一次 `csmar_bulk_schema` 拉回 schema 字典(含 `field_label` / `role_tags`)；同时灌进 csmar-mcp 本地缓存 |
 | verification_phase            | LLM 分桶批量   | 按 (db, table) 分桶，每桶一次 `with_structured_output()` 调用判定字段；输出按变量合并(任一桶 found 即 found);soft not_found 直接记入报告 |
 | fallback_react_phase          | LLM 单变量 ReAct | 仅 hard 变量在 verification 仍 not_found 时启用；带 list_tables + get_table_schema 两件套兜底,负责修复 Planning 漏选候选表的场景 |
-| coverage_phase                | 纯代码         | 对 validation_queue 每条候选批量调用 `csmar_probe_query` 解码为 CoverageOutcome,并据此写 ProbeReport / DownloadManifest;hard 失败 → END (hard_failure);soft 失败 → 写 not_found |
+| coverage_phase                | 纯代码         | 对 validation_queue 每条候选的 `key_fields + source_fields` 批量调用 `csmar_probe_query` 解码为 CoverageOutcome,并据此写 ProbeReport / DownloadManifest;hard 失败 → END (hard_failure);soft 失败 → 写 not_found |
 
 **设计要点：**
 
 - 字段发现由广度优先流水线主导，跨变量复用 list_tables 与 bulk_schema 的结果，最优路径 = 1 次 Planning + 1 次 bulk_schema + #候选(db,table) 桶次 Verification
 - 预算控制分层：Planning Agent 全局 `planning_agent_max_calls`；Fallback 单变量 `fallback_react_max_calls`
 - 覆盖率与 record_count 由 `coverage_phase` 代码批量验证(`can_materialize` / `invalid_columns` 与 MCP 服务端保持一致)
-- Verification 阶段对 LLM 输出的 field 做后处理校验(必须出现在 schema 中)，凭空字段降级为 not_found
+- Verification 阶段对 LLM 输出的 `source_fields` / `key_fields` 做后处理校验(必须全部出现在 schema 中)，凭空字段降级为 `not_found`
+- 探针的 `found` 表示变量可直接取得、可由语义等价字段取得，或可由确定性规则构造；近似代理不自动记为 found
 - `data_download` 节点会再调一次 `csmar_probe_query` 取最新 validation_id；当前不复用本阶段的 validation_id 以避免 TTL 过期回滚成本(MCP 侧缓存命中开销极低)
 
 ---
@@ -151,11 +152,11 @@ probe_subgraph START
 
 - input：`EmpiricalSpec` + `ModelPlan`
 - action（拆为两阶段）：
-  - **阶段一 字段发现（Agent）**：Planning Agent 用 `csmar_list_tables` 给出每个变量的 (target_db, candidate_tables[])，代码层批量调 `csmar_bulk_schema` 拉 schema，Verification 分桶判定字段是否存在；hard 变量仍 not_found 时启用 Fallback ReAct（`csmar_list_tables` + `csmar_get_table_schema` 两件套）。整阶段只输出 `(database, table, field, key_fields, filters.condition?)` 与 status；**不再估算 record_count / 行数**
-  - **阶段二 覆盖率验证（代码）**：对阶段一所有 found 的字段批量调用 `csmar_probe_query`（dry-run），用 MCP 自带的 `can_materialize` / `invalid_columns` 作为门禁；通过即写入 `DownloadManifest`，失败则等同 `not_found` 走与字段未找到一致的 Hard/Soft 路由
+  - **阶段一 可得性发现（Agent）**：Planning Agent 用 `csmar_list_tables` 给出每个变量的 (target_db, candidate_tables[])，代码层批量调 `csmar_bulk_schema` 拉 schema，Verification 分桶判定变量是否可由表内字段直接取得、语义等价取得或确定性构造；hard 变量仍 not_found 时启用 Fallback ReAct（`csmar_list_tables` + `csmar_get_table_schema` 两件套）。整阶段输出 `(database, table, field, source_fields, key_fields, match_kind, transform, evidence, filters.condition?)` 与 status；**不再估算 record_count / 行数**
+  - **阶段二 覆盖率验证（代码）**：对阶段一所有 found 的 `key_fields + source_fields` 批量调用 `csmar_probe_query`（dry-run），用 MCP 自带的 `can_materialize` / `invalid_columns` 作为门禁；通过即写入 `DownloadManifest`，失败则等同 `not_found` 走与字段未找到一致的 Hard/Soft 路由
   - 若 Hard Contract 变量在任一阶段失败，立即整体硬失败
   - 若 Soft Contract 变量在任一阶段失败,直接记 `not_found`,不再尝试替代变量
-- output：`ProbeReport`（逐变量可得性结论）+ `DownloadManifest`（具体到 database/table/field/过滤条件的下载参数清单）
+- output：`ProbeReport`（逐变量可得性结论）+ `DownloadManifest`（具体到 database/table/source_fields/transform/过滤条件的下载参数清单）
 
 ### Human In the Loop
 
@@ -171,15 +172,15 @@ probe_subgraph START
 ### 数据批量获取
 
 - input：`DownloadManifest`
-- action：纯代码解析 DownloadManifest 中的下载参数，调用 csmar_mcp 提供的 tools 进行数据下载
+- action：纯代码解析 DownloadManifest 中的下载参数，调用 csmar_mcp 提供的 tools 下载所有原料字段；本节点不解释 transform
 - output：`DownloadedFiles`——所有下载文件的路径清单
 
 ### 数据清洗
 
 - input：`EmpiricalSpec` + `DownloadedFiles`
 - action：
-  - 需要整理DownloadedFiles中的变量名，规划最终单一分析长表的表名，表名整理成能够直接导入stata分析的格式
-  - LLM 编写 Python 脚本，将 csv 文件完成跨表主键对齐、宽长表转换与合并，构建单一分析长表
+  - 需要整理 DownloadedFiles 中的变量名与 variable_mappings，规划最终单一分析长表的表名，表名整理成能够直接导入 Stata 分析的格式
+  - LLM 使用 DuckDB SQL 将 csv 文件完成跨表主键对齐、宽长表转换与合并，并按 variable_mappings 执行 `pass_through`、`firm_age`、简单 `ratio`、`log` 等确定性变换；不确定公式不得临场发明
 - output：`MergedDataset`——整理清洗合并后的单一分析长表 csv 文件路径
 - post-condition：主键唯一性、长表行数合理、关键字段 key 覆盖率校验通过；失败则在节点内部重试
 

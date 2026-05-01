@@ -13,8 +13,12 @@ from typing import Any
 
 import pytest
 
-from harness_stata.nodes.data_download import data_download
-from harness_stata.state import WorkflowState
+from harness_stata.nodes.data_download import (
+    _build_probe_payload,
+    _make_downloaded_files,
+    data_download,
+)
+from harness_stata.state import DownloadTask, WorkflowState
 
 
 def _run(state: WorkflowState) -> dict[str, Any]:
@@ -31,3 +35,42 @@ def test_data_download_missing_manifest_raises() -> None:
     state: WorkflowState = {}
     with pytest.raises(ValueError, match="download_manifest"):
         _run(state)
+
+
+def test_build_probe_payload_uses_raw_variable_fields() -> None:
+    task = DownloadTask(
+        database="CSMAR",
+        table="T1",
+        key_fields=["Stkcd", "AccYear"],
+        variable_fields=["EstablishDate", "CashRecoveryRate"],
+        variable_names=["Age", "CashFlow"],
+        filters={"start_date": "2010-01-01", "end_date": "2020-12-31"},
+    )
+
+    payload = _build_probe_payload(task)
+
+    assert payload["columns"] == ["Stkcd", "AccYear", "EstablishDate", "CashRecoveryRate"]
+
+
+def test_make_downloaded_files_carries_variable_mappings() -> None:
+    task = DownloadTask(
+        database="CSMAR",
+        table="T1",
+        key_fields=["Stkcd", "AccYear"],
+        variable_fields=["EstablishDate"],
+        variable_names=["Age"],
+        variable_mappings=[
+            {
+                "variable_name": "Age",
+                "source_fields": ["EstablishDate"],
+                "match_kind": "derived",
+                "transform": {"op": "firm_age", "date_field": "EstablishDate"},
+                "evidence": "企业年龄可由成立日期构造",
+            }
+        ],
+        filters={"start_date": "2010-01-01", "end_date": "2020-12-31"},
+    )
+
+    files = _make_downloaded_files(task, ["D:/tmp/T1/data.csv"])
+
+    assert files[0]["variable_mappings"] == task["variable_mappings"]

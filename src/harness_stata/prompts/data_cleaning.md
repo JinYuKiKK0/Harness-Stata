@@ -6,6 +6,7 @@
 
 - 按分析粒度确定的主键在最终视图中唯一
 - 列名全部 `snake_case`（小写、下划线分隔、不含空格/中文/保留字），变量名与 `EmpiricalSpec.variables[*].name` 对齐
+- 每个最终变量列必须来自 HumanMessage 中的 `variable_mappings`
 
 ## 可用工具
 
@@ -18,6 +19,13 @@
 ## 已预注册视图
 
 HumanMessage 已给出每个 `src_<source_table>` 视图的完整 schema 与前 3 行样本，可直接查询。
+HumanMessage 还会给出每个变量的 `variable_mappings`:
+
+- `direct_field` / `semantic_equivalent` 且 `transform.op="pass_through"`：把 `source_fields[0]` 清洗后重命名为目标变量列
+- `derived` 且 `transform.op="firm_age"`：用样本期时间键年份减去成立/上市/注册日期年份，构造企业年龄
+- `derived` 且 `transform.op="ratio"`：只使用 transform 明确声明的 numerator / denominator 字段
+- `derived` 且 `transform.op="log"`：只对 transform 明确声明的字段取自然对数
+- 若 transform 缺失、未知或所需原料字段不存在，不要临场发明公式
 
 ## 不要做
 

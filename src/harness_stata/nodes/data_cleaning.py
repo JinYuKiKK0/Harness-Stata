@@ -4,6 +4,8 @@
 EmpiricalSpec（F09），打开一个内存 DuckDB 连接，把每份下载的 CSV 预先注册为
 ``src_<source_table>`` 视图；把唯一的 ``run_sql`` 工具绑定给 agent,由 LLM 写
 SQL 完成清洗/连接/宽长转换,再由节点执行后置校验并写入 ``merged_dataset``。
+下载阶段透传的 ``variable_mappings`` 会注入 prompt,用于把原料字段构造为
+``EmpiricalSpec.variables[*].name`` 对齐的最终变量列。
 
 失败分层：主键重复、final_view 缺失、ReAct 超轮截断 -> RuntimeError；
 变量覆盖率低于 ``Settings.cleaning_coverage_threshold`` -> 仅进入
@@ -12,6 +14,7 @@ SQL 完成清洗/连接/宽长转换,再由节点执行后置校验并写入 ``m
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import Path
@@ -137,17 +140,28 @@ def _probe_sources_for_prompt(
         ]
         sample_df = conn.execute(f'SELECT * FROM "{view_name}" LIMIT {_SAMPLE_ROWS}').fetchdf()
         sample_txt = sample_df.to_string(index=False) if len(sample_df) > 0 else "(empty table)"
+        mappings_txt = _format_variable_mappings(f.get("variable_mappings"))
         block = (
             f"{i}. path={f['path']}\n"
             f"   source_table={f['source_table']}  (registered view: {view_name})\n"
             f"   key_fields={f['key_fields']}\n"
             f"   variable_names={f['variable_names']}\n"
+            f"   variable_mappings:\n{mappings_txt}\n"
             f"   schema:\n"
             + "\n".join(schema_lines)
             + f"\n   sample (first {_SAMPLE_ROWS} rows):\n{sample_txt}"
         )
         blocks.append(block)
     return blocks
+
+
+def _format_variable_mappings(raw: object) -> str:
+    if not isinstance(raw, list) or not raw:
+        return "[]"
+    try:
+        return json.dumps(raw, ensure_ascii=False, indent=2, sort_keys=True)
+    except TypeError:
+        return str(raw)
 
 
 def _build_human_prompt(
@@ -164,6 +178,10 @@ def _build_human_prompt(
         f"data_frequency: {spec['data_frequency']}\n\n"
         f"## variables (EmpiricalSpec.variables)\n"
         f"{_format_variables(spec['variables'])}\n\n"
+        f"## variable mapping contract\n"
+        "Use variable_mappings under each source view to decide which raw fields feed each"
+        " final variable. Final variable columns must align with EmpiricalSpec.variables[*].name"
+        " (snake_case form is acceptable for Stata-safe columns).\n\n"
         f"## pre-registered source views\n" + "\n\n".join(source_blocks) + "\n\n"
         f"## output_path (node will export final_view here; do NOT COPY yourself)\n"
         f"{output_path}\n\n"

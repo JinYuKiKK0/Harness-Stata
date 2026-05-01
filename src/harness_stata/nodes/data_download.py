@@ -4,6 +4,8 @@ Pure-code node. Consumes DownloadManifest emitted by the probe subgraph,
 invokes csmar-mcp tools (``csmar_probe_query`` -> ``csmar_materialize_query``)
 sequentially for each DownloadTask, and records the resulting file paths in
 ``downloaded_files`` for the downstream data_cleaning node.
+``variable_fields`` are raw source fields; variable construction rules are
+carried through as ``variable_mappings`` and interpreted by data_cleaning.
 
 Failure is hard: any task whose probe returns ``can_materialize=False`` or
 whose materialize call raises aborts the entire node with a RuntimeError;
@@ -144,15 +146,28 @@ def _extract_file_paths(mat_result: Mapping[str, Any], task: DownloadTask) -> li
 
 
 def _make_downloaded_files(task: DownloadTask, files: Sequence[str]) -> list[DownloadedFile]:
-    return [
-        DownloadedFile(
+    downloaded: list[DownloadedFile] = []
+    variable_mappings = task.get("variable_mappings")
+    for p in files:
+        item = DownloadedFile(
             path=p,
             source_table=task["table"],
             key_fields=list(task["key_fields"]),
             variable_names=list(task["variable_names"]),
         )
-        for p in files
-    ]
+        if variable_mappings:
+            item["variable_mappings"] = [
+                {
+                    "variable_name": m["variable_name"],
+                    "source_fields": list(m["source_fields"]),
+                    "match_kind": m["match_kind"],
+                    "transform": dict(m["transform"]) if m["transform"] is not None else None,
+                    "evidence": m.get("evidence"),
+                }
+                for m in variable_mappings
+            ]
+        downloaded.append(item)
+    return downloaded
 
 
 # ---------------------------------------------------------------------------

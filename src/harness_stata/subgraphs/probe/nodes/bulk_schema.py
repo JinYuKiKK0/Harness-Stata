@@ -19,7 +19,7 @@ async def bulk_schema_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[str
                 seen.add(code)
                 candidates.append(code)
     if not candidates:
-        return {"schema_dict": {}}
+        return {"schema_dict": {}, "table_names": {}}
     try:
         msg: Any = await cfg.bulk_schema_tool.ainvoke(
             {
@@ -30,10 +30,10 @@ async def bulk_schema_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[str
             }
         )
     except Exception:
-        return {"schema_dict": {}}
+        return {"schema_dict": {}, "table_names": {}}
     artifact = getattr(msg, "artifact", None)
     payload: object = None
     if isinstance(artifact, dict) and "structured_content" in artifact:
         payload = artifact["structured_content"]
     result = parse_bulk_schema_response(payload)
-    return {"schema_dict": result.schema_dict}
+    return {"schema_dict": result.schema_dict, "table_names": result.table_names}
