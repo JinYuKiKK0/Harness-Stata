@@ -13,7 +13,7 @@ from pathlib import Path
 
 from harness_stata.observability.models import RunMeta
 from harness_stata.observability.store import RunStore
-from harness_stata.observability.tracer import HarnessTracer
+from harness_stata.observability.tracer import HarnessTracer, _attribution_from_metadata
 
 
 def _meta(run_id: str = "20260502T120000Z-tttt") -> RunMeta:
@@ -173,3 +173,45 @@ class TestMarkStatus:
         assert meta["status"] == "interrupted"
         tracer.mark_status("success")
         assert tracer.store.read_meta()["status"] == "success"
+
+
+# ---------------------------------------------------------------------------
+# Callback attribution: derive (namespace, node) from metadata.checkpoint_ns
+# ---------------------------------------------------------------------------
+
+
+class TestAttributionFromMetadata:
+    def test_root_graph_node_no_namespace(self) -> None:
+        meta = {"langgraph_node": "data_cleaning", "checkpoint_ns": ""}
+        assert _attribution_from_metadata(meta) == ((), "data_cleaning")
+
+    def test_root_graph_node_missing_checkpoint_ns(self) -> None:
+        meta = {"langgraph_node": "data_cleaning"}
+        assert _attribution_from_metadata(meta) == ((), "data_cleaning")
+
+    def test_single_level_subgraph(self) -> None:
+        meta = {
+            "langgraph_node": "model",
+            "checkpoint_ns": "data_cleaning:98152a22-c4be-78f3-582d-232bd7f8c6d5",
+        }
+        assert _attribution_from_metadata(meta) == (
+            ("data_cleaning:98152a22-c4be-78f3-582d-232bd7f8c6d5",),
+            "model",
+        )
+
+    def test_nested_subgraph_pipe_separated(self) -> None:
+        meta = {
+            "langgraph_node": "leaf",
+            "checkpoint_ns": "outer:a|inner:b",
+        }
+        assert _attribution_from_metadata(meta) == (
+            ("outer:a", "inner:b"),
+            "leaf",
+        )
+
+    def test_returns_none_when_langgraph_node_missing(self) -> None:
+        assert _attribution_from_metadata({"checkpoint_ns": "x:1"}) is None
+
+    def test_returns_none_for_empty_metadata(self) -> None:
+        assert _attribution_from_metadata(None) is None
+        assert _attribution_from_metadata({}) is None

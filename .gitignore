@@ -29,8 +29,6 @@ downloads/*
 !downloads/fixtures/
 downloads/fixtures/*/*
 !downloads/fixtures/*/
-!downloads/fixtures/**/request.json
-!downloads/fixtures/**/data_cleaning_input.json
 !downloads/fixtures/**/input_state.json
 .harness/
 resources

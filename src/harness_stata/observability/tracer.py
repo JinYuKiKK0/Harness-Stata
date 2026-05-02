@@ -76,18 +76,24 @@ def _attribution_from_metadata(
 ) -> tuple[tuple[str, ...], str] | None:
     """Derive (namespace, node) for LLM/tool event attribution.
 
-    Best-effort — relies on ``metadata.langgraph_node`` set by LangGraph
-    on each node-level Runnable. Subgraph nesting cannot be reliably
-    recovered from callback metadata alone, so we attribute to the root
-    node level; node-IO directory paths come from the stream channel and
-    are authoritative.
+    LangGraph injects two metadata fields per node-level chain:
+
+    * ``langgraph_node`` — current node's name
+    * ``checkpoint_ns`` — pipe-separated parent path with the same
+      ``<parent>:<task_id>`` segment format the stream channel uses;
+      empty / absent on root-graph nodes.
+
+    Returns ``None`` if attribution cannot be determined (rare; non-
+    LangGraph chains).
     """
     if not metadata:
         return None
     node = metadata.get("langgraph_node")
     if not isinstance(node, str) or not node:
         return None
-    return ((), node)
+    ckpt_ns = metadata.get("checkpoint_ns")
+    namespace = tuple(ckpt_ns.split("|")) if isinstance(ckpt_ns, str) and ckpt_ns else ()
+    return (namespace, node)
 
 
 class HarnessTracer(BaseCallbackHandler):
