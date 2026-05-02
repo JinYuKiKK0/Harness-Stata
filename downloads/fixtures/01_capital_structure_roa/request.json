@@ -1,0 +1,9 @@
+{
+  "topic": "资本结构对企业绩效的影响研究",
+  "x_variable": "资产负债率 (Leverage，即总负债/总资产)",
+  "y_variable": "总资产收益率 (ROA，即净利润/总资产)",
+  "sample_scope": "中国A股非金融类上市公司",
+  "time_range_start": "2013-01-01",
+  "time_range_end": "2023-12-31",
+  "data_frequency": "yearly"
+}

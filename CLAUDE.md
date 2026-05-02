@@ -36,11 +36,8 @@ harness-stata/
 │   ├── subgraphs/                # 可复用子图工厂（实现细节）
 │   │   └── probe/                # data_probe 子图（节点级 colocation + 共享 pure 纯逻辑）
 │   ├── prompts/                  # Markdown 格式 system prompt
-│   └── clients/                  # 外部依赖统一入口（contextmanager 管理生命周期）
-│       ├── csmar.py              # CSMAR-Data-MCP 客户端适配
-│       ├── stata.py              # Stata-Executor-MCP 客户端适配
-│       ├── mcp.py                # MCP 工具调用 helper（structured_content 解码）
-│       └── llm.py                # LLM 客户端封装
+│   ├── clients/                  # 外部依赖统一入口（contextmanager 管理生命周期）
+│   └── observability/            # 节点单跑 + JSONL trace 持久化（不侵入业务代码）
 ├── csmar-mcp/                    # 外部 MCP submodule，主应用通过 stdio MCP 协议调用
 ├── stata-executor/               # 外部 MCP submodule，主应用通过 stdio MCP 协议调用
 ├── docs/

@@ -1,0 +1,9 @@
+{
+   "topic": "金融科技对商业银行信贷风险的影响",
+   "x_variable": "数字普惠金融指数 (DIF，北京大学数字普惠金融指数总指数 / 100)",
+   "y_variable": "不良贷款率 (NPL，不良贷款余额 / 贷款总额 × 100%)",
+   "sample_scope": "中国商业银行（含国有大行、股份制、城商行、农商行等）非平衡面板",
+   "time_range_start": "2011-01-01",
+   "time_range_end": "2022-12-31",
+   "data_frequency": "yearly"
+}

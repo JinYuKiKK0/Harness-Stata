@@ -158,11 +158,12 @@ ignore_imports = [
 ]
 
 [[tool.importlinter.contracts]]
-name = """[layers] 分层依赖方向（高 → 低）：cli > graph > nodes > subgraphs > clients。低层不得反向 import 高层。
+name = """[layers] 分层依赖方向（高 → 低）：cli > observability > graph > nodes > subgraphs > clients。低层不得反向 import 高层。
 Fix: 检查违规导入，把共享类型/工具下沉到 state.py / config.py / prompts/（不在分层中），或抽象为独立基础模块。"""
 type = "layers"
 layers = [
     "harness_stata.cli",
+    "harness_stata.observability",
     "harness_stata.graph",
     "harness_stata.nodes",
     "harness_stata.subgraphs",

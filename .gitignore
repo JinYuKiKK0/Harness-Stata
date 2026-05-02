@@ -9,7 +9,10 @@ csmar-mcp/token.txt
 csmar-mcp/csmar-log.log
 csmar-mcp/.stata_agent/
 .agents/
-.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/node-debugging/
 uv.lock
 .env
 .langgraph_api
@@ -22,6 +25,13 @@ docs/LangChain-docs
 .stata_agent
 docs/run_results
 docs/probe_node.md
-downloads
+downloads/*
+!downloads/fixtures/
+downloads/fixtures/*/*
+!downloads/fixtures/*/
+!downloads/fixtures/**/request.json
+!downloads/fixtures/**/data_cleaning_input.json
+!downloads/fixtures/**/input_state.json
+.harness/
 resources
 scripts/try_data_cleaning.py

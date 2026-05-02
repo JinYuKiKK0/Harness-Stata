@@ -1,0 +1,9 @@
+{
+  "topic": "数字金融对商业银行流动性创造的影响",
+  "x_variable": "数字普惠金融指数 (DIFI，北京大学数字普惠金融指数)",
+  "y_variable": "商业银行流动性创造水平 (LC，按Berger-Bouwman方法计算并以总资产标准化)",
+  "sample_scope": "中国商业银行（含国有大型商业银行、股份制商业银行、城市商业银行及农村商业银行）",
+  "time_range_start": "2013-01-01",
+  "time_range_end": "2023-12-31",
+  "data_frequency": "yearly"
+}

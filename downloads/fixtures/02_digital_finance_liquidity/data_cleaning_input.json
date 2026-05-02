@@ -1,0 +1,82 @@
+{
+  "empirical_spec": {
+    "topic": "数字金融对商业银行流动性创造的影响",
+    "variables": [
+      {
+        "name": "LC",
+        "description": "商业银行流动性创造水平，按 Berger-Bouwman 方法计算并以总资产标准化",
+        "contract_type": "hard",
+        "role": "dependent"
+      },
+      {
+        "name": "DIFI",
+        "description": "数字普惠金融总指数 / 100",
+        "contract_type": "hard",
+        "role": "independent"
+      },
+      {
+        "name": "Size",
+        "description": "银行规模，年末总资产的自然对数",
+        "contract_type": "soft",
+        "role": "control"
+      },
+      {
+        "name": "ROE",
+        "description": "净资产收益率",
+        "contract_type": "soft",
+        "role": "control"
+      },
+      {
+        "name": "NPL_ctrl",
+        "description": "不良贷款率，作为银行风险的控制变量",
+        "contract_type": "soft",
+        "role": "control"
+      },
+      {
+        "name": "CIR",
+        "description": "成本收入比",
+        "contract_type": "soft",
+        "role": "control"
+      },
+      {
+        "name": "ProvinceName",
+        "description": "银行总部所在省份名称，用于将银行级面板与省份级数字金融指数对齐",
+        "contract_type": "soft",
+        "role": "control"
+      }
+    ],
+    "sample_scope": "中国商业银行（含国有大型商业银行、股份制商业银行、城市商业银行及农村商业银行）",
+    "time_range_start": "2013-01-01",
+    "time_range_end": "2023-12-31",
+    "data_frequency": "yearly",
+    "analysis_granularity": "bank-year"
+  },
+  "downloaded_files": {
+    "files": [
+      {
+        "path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/02_digital_finance_liquidity/BANK_LIQUIDITY/中国各银行流动性创造（2012-2023年）.csv",
+        "source_table": "BANK_LIQUIDITY",
+        "key_fields": ["代码", "年份"],
+        "variable_names": ["LC", "Size"]
+      },
+      {
+        "path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/02_digital_finance_liquidity/BANK_METRICS/BANK_Combas(Merge Query).csv",
+        "source_table": "BANK_METRICS_MERGE",
+        "key_fields": ["BANK_Combas.Bankcd", "BANK_Combas.Accper"],
+        "variable_names": ["ROE", "NPL_ctrl", "CIR"]
+      },
+      {
+        "path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/02_digital_finance_liquidity/DIGITAL_FINANCE/finance.csv",
+        "source_table": "DIGITAL_FINANCE",
+        "key_fields": ["prov_code", "year"],
+        "variable_names": ["DIFI"]
+      },
+      {
+        "path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/02_digital_finance_liquidity/BANK_Info.csv",
+        "source_table": "BANK_Info",
+        "key_fields": ["Bankcd"],
+        "variable_names": ["ProvinceName"]
+      }
+    ]
+  }
+}

@@ -2,6 +2,14 @@
 
 Exports a module-level compiled graph so ``langgraph dev`` can load the
 workflow directly from ``langgraph.json``.
+
+Note on observability: this entrypoint deliberately does **not** attach
+:class:`harness_stata.observability.HarnessTracer`. ``langgraph dev``
+loads ``graph`` exactly once at module import and reuses it across every
+LangSmith Studio session — binding a single tracer instance would let
+sessions overwrite each other's ``.harness/runs/<id>/`` directory. For
+trace persistence go through the CLI (``harness-stata run`` or
+``harness-stata node-run``); use Studio for interactive exploration only.
 """
 
 from __future__ import annotations

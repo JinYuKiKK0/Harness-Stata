@@ -1,16 +1,19 @@
 """Typer CLI entry point for Harness-Stata.
 
-Single ``run`` command: accepts the 6 mandatory ``UserRequest`` fields,
-drives the compiled workflow graph with ``asyncio.run``, captures the
-``hitl_plan_review`` interrupt via same-process blocking prompts, and
-resumes via ``Command(resume=...)``. Final state is printed to stdout
-and (on success paths with a ``merged_dataset``) dumped next to the
-session's artifacts as ``final_state.json``.
+Two commands:
+
+* ``run`` — full workflow end-to-end with HITL prompts; trace persisted to
+  ``.harness/runs/<id>/`` automatically.
+* ``node-run`` — isolated single-node execution loaded from a fixture
+  (``--from-run`` / ``--from-fixture`` / default = ``.harness/latest``);
+  same trace target. CLI-runnable nodes whitelisted in
+  ``observability.NODE_REGISTRY``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import json
 import uuid
 from enum import StrEnum
@@ -20,11 +23,33 @@ from typing import Any
 import typer
 from langgraph.types import Command
 
-from harness_stata.config import apply_langsmith_env
+from harness_stata.config import apply_langsmith_env, get_settings
 from harness_stata.graph import build_graph
+from harness_stata.observability import (
+    NODE_REGISTRY,
+    FixtureLoader,
+    HarnessTracer,
+    NodeRunner,
+    RunStore,
+)
+from harness_stata.observability.models import RunMeta
+from harness_stata.observability.store import generate_run_id
 from harness_stata.state import UserRequest, WorkflowState
 
 __all__ = ["app"]
+
+
+def _config_summary() -> dict[str, str]:
+    """Capture model + version into ``RunMeta.config`` so reading old
+    runs across upgrades makes sense."""
+    try:
+        version = importlib.metadata.version("harness-stata")
+    except importlib.metadata.PackageNotFoundError:
+        version = "unknown"
+    return {
+        "llm_model": get_settings().llm_model_name,
+        "harness_version": version,
+    }
 
 
 class DataFrequency(StrEnum):
@@ -156,17 +181,42 @@ def _dump_final_state(state: dict[str, Any]) -> Path | None:
 
 
 async def _drive_graph(initial: WorkflowState, thread_id: str) -> dict[str, Any]:
-    """Run the graph to completion, handling hitl interrupts in-process."""
+    """Run the graph to completion, handling hitl interrupts in-process.
+
+    Trace is persisted to ``.harness/runs/<run_id>/`` via :class:`HarnessTracer`.
+    Interrupt-resume reuses the same ``RunStore`` so a single run directory
+    captures the full timeline (running → interrupted → running → success).
+    """
     graph = build_graph()
     config: Any = {"configurable": {"thread_id": thread_id}}
 
-    result: dict[str, Any] = await graph.ainvoke(initial, config=config)
+    project_root = Path.cwd()
+    meta: RunMeta = {
+        "run_id": generate_run_id(),
+        "status": "running",
+        "mode": "full",
+        "config": _config_summary(),  # type: ignore[typeddict-item]
+    }
+    store = RunStore.create(project_root, meta)
+    tracer = HarnessTracer(store)
 
-    while (payload := _interrupt_payload(result)) is not None:
-        decision = _prompt_hitl_decision(payload)
-        result = await graph.ainvoke(Command(resume=decision), config=config)
+    typer.echo(f"[harness-stata] trace -> {store.run_dir}")
 
-    snapshot = await graph.aget_state(config)
+    try:
+        result = await tracer.run(graph, initial, config=config)
+        while (payload := _interrupt_payload(result)) is not None:
+            tracer.mark_status("interrupted")
+            decision = _prompt_hitl_decision(payload)
+            tracer.append_timeline(node="hitl", event="resume")
+            result = await tracer.run(graph, Command(resume=decision), config=config)
+        snapshot = await graph.aget_state(config)
+    except BaseException as exc:
+        tracer.append_timeline(node="<root>", event="error", error=str(exc))
+        tracer.mark_status("failed")
+        raise
+
+    final_status = snapshot.values.get("workflow_status", "success")
+    tracer.mark_status(final_status)
     return snapshot.values
 
 
@@ -212,3 +262,64 @@ def run(
     status = final_state.get("workflow_status")
     if status in ("failed_hard_contract", "rejected"):
         raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# node-run command
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="node-run")
+def node_run(
+    node: str = typer.Argument(
+        ...,
+        help=f"Target node. Whitelisted: {sorted(NODE_REGISTRY.keys())}",
+    ),
+    from_run: str | None = typer.Option(
+        None,
+        "--from-run",
+        help="Load fixture from .harness/runs/<run_id>/nodes/<node>/input.json",
+    ),
+    from_fixture: str | None = typer.Option(
+        None,
+        "--from-fixture",
+        help="Load fixture from downloads/fixtures/<subdir>/input_state.json",
+    ),
+) -> None:
+    """Run a single node in isolation, capturing trace to .harness/runs/<id>/."""
+    if node not in NODE_REGISTRY:
+        valid = sorted(NODE_REGISTRY.keys())
+        typer.secho(
+            f"unknown node {node!r}; CLI-runnable nodes: {valid}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if from_run is not None and from_fixture is not None:
+        typer.secho(
+            "--from-run and --from-fixture are mutually exclusive",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    project_root = Path.cwd()
+    loader = FixtureLoader(project_root)
+    if from_fixture is not None:
+        state, source = loader.load_from_fixture(from_fixture, node)
+    elif from_run is not None:
+        state, source = loader.load_from_run(from_run, node)
+    else:
+        state, source = loader.load_latest(node)
+
+    if apply_langsmith_env():
+        typer.echo("[harness-stata] LangSmith tracing enabled")
+    typer.echo(f"[harness-stata] node-run {node!r} fixture={source}")
+
+    runner = NodeRunner(project_root, node)
+    final, store = asyncio.run(
+        runner.run(state, fixture_source=source, config_summary=_config_summary())
+    )
+
+    typer.echo(f"[harness-stata] trace -> {store.run_dir}")
+    typer.echo(f"[harness-stata] result keys: {sorted(final.keys())}")
