@@ -88,7 +88,6 @@
 | variable_name | str                                       | EmpiricalSpec 中的目标变量名 |
 | source_fields | list[str]                                 | 下载所需的 CSMAR 原料字段；必须来自 schema/tool 返回 |
 | match_kind    | ProbeMatchKind                            | 变量可得性类型 |
-| transform     | dict \| None                              | 构造规则；直接/语义等价通常为 `{"op":"pass_through"}` |
 | evidence      | str \| None                               | 探针判定依据，供调试与 HITL 展示 |
 
 #### EmpiricalSpec
@@ -148,7 +147,6 @@
 | record_count       | int \| None                                                                        | 记录计数      |
 | match_kind          | ProbeMatchKind \| None                                                             | 命中类型      |
 | source_fields      | list[str]                                                                          | 原料字段清单  |
-| transform           | dict \| None                                                                       | 构造规则      |
 | evidence            | str \| None                                                                        | 判定依据      |
 
 #### DownloadManifest
@@ -168,7 +166,7 @@
 | key_fields      | list[str] | 主键/时间键字段（探针下钻 schema 后确定）   |
 | variable_fields   | list[str]              | 需要下载的原料字段（含直接字段、语义等价字段、派生变量原料字段） |
 | variable_names    | list[str]              | 该任务覆盖的目标变量名；不要求与 variable_fields 一一对应 |
-| variable_mappings | list[VariableMapping]  | 每个目标变量到原料字段和 transform 的映射 |
+| variable_mappings | list[VariableMapping]  | 每个目标变量到原料字段的映射(具体派生公式由 cleaning 阶段按变量 description 决定) |
 | filters         | dict      | 严格过滤条件：必含 `start_date` / `end_date`（`YYYY-MM-DD`），可选 `condition` |
 
 #### hitl_decision

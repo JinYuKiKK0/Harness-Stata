@@ -62,7 +62,6 @@ _MATCH_KINDS: set[ProbeMatchKind] = {
     "semantic_equivalent",
     "derived",
 }
-_DERIVED_OPS = frozenset({"firm_age", "ratio", "log"})
 
 
 # ---------------------------------------------------------------------------
@@ -303,9 +302,6 @@ def _normalize_bucket_found(
         return None
 
     match_kind = _match_kind_for_finding(finding)
-    transform = _transform_for_finding(finding)
-    if not _transform_is_usable(match_kind, transform, source_fields):
-        return None
 
     return VariableProbeFindingModel(
         status="found",
@@ -314,7 +310,6 @@ def _normalize_bucket_found(
         field=source_fields[0],
         match_kind=match_kind,
         source_fields=source_fields,
-        transform=transform,
         evidence=finding.evidence,
         key_fields=key_fields or None,
         filters=dict(finding.filters or {}) or None,
@@ -357,47 +352,6 @@ def _match_kind_for_finding(
     return "direct_field"
 
 
-def _transform_for_finding(
-    finding: BucketVariableFinding | VariableProbeFindingModel,
-) -> dict[str, object] | None:
-    if isinstance(finding.transform, dict) and finding.transform:
-        return dict(finding.transform)
-    if _match_kind_for_finding(finding) in {"direct_field", "semantic_equivalent"}:
-        return {"op": "pass_through"}
-    return None
-
-
-def _transform_is_usable(
-    match_kind: ProbeMatchKind,
-    transform: dict[str, object] | None,
-    source_fields: list[str],
-) -> bool:
-    if match_kind in {"direct_field", "semantic_equivalent"}:
-        return transform is None or transform.get("op") == "pass_through"
-    if transform is None:
-        return False
-    op = transform.get("op")
-    if not isinstance(op, str) or op not in _DERIVED_OPS:
-        return False
-    sources = set(source_fields)
-    if op == "firm_age":
-        date_field = transform.get("date_field")
-        return isinstance(date_field, str) and date_field in sources
-    if op == "ratio":
-        numerator = transform.get("numerator")
-        denominator = transform.get("denominator")
-        return (
-            isinstance(numerator, str)
-            and numerator in sources
-            and isinstance(denominator, str)
-            and denominator in sources
-        )
-    if op == "log":
-        field = transform.get("field")
-        return isinstance(field, str) and field in sources
-    return False
-
-
 def finding_mapping_failure_reason(finding: VariableProbeFindingModel) -> str | None:
     """Return why a found finding cannot be safely mapped, or None if usable.
 
@@ -408,10 +362,6 @@ def finding_mapping_failure_reason(finding: VariableProbeFindingModel) -> str | 
     source_fields = _source_fields_for_finding(finding)
     if not source_fields:
         return "found finding has no source_fields or field"
-    match_kind = _match_kind_for_finding(finding)
-    transform = _transform_for_finding(finding)
-    if not _transform_is_usable(match_kind, transform, source_fields):
-        return f"unusable transform for match_kind={match_kind!r}"
     return None
 
 
@@ -447,13 +397,11 @@ def _copy_variable_mappings(raw: object) -> list[VariableMapping]:
             or match_kind not in _MATCH_KINDS
         ):
             continue
-        transform = item.get("transform")
         typed_match_kind = cast(ProbeMatchKind, match_kind)
         mapping = VariableMapping(
             variable_name=variable_name,
             source_fields=[f for f in source_fields if isinstance(f, str)],
             match_kind=typed_match_kind,
-            transform=dict(transform) if isinstance(transform, dict) else None,
         )
         evidence = item.get("evidence")
         if evidence is None or isinstance(evidence, str):
@@ -491,7 +439,6 @@ def _build_variable_mapping(
         variable_name=var["name"],
         source_fields=_source_fields_for_finding(finding),
         match_kind=_match_kind_for_finding(finding),
-        transform=_transform_for_finding(finding),
     )
     mapping["evidence"] = finding.evidence
     return mapping
@@ -527,7 +474,6 @@ def build_found_result(
     )
     result["match_kind"] = _match_kind_for_finding(finding)
     result["source_fields"] = source_fields
-    result["transform"] = _transform_for_finding(finding)
     result["evidence"] = finding.evidence
     return result
 

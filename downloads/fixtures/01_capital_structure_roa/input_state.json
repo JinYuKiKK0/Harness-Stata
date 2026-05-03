@@ -65,78 +65,99 @@
       {
         "path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/01_capital_structure_roa/财务指标分析_FI_T5/download_d6be52d303_1499781734828380160/FI_T5.csv",
         "source_table": "FI_T5",
-        "key_fields": [
-          "Stkcd",
-          "Accper"
-        ],
-        "variable_names": [
-          "ROA"
+        "key_fields": ["Stkcd", "Accper"],
+        "variable_names": ["ROA"],
+        "variable_mappings": [
+          {
+            "variable_name": "ROA",
+            "source_fields": ["F050201B"],
+            "match_kind": "direct_field",
+            "evidence": "CSMAR 字段 F050201B 即总资产收益率（净利润/总资产）"
+          }
         ]
       },
       {
         "path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/01_capital_structure_roa/财务指标分析_FI_T1/download_409217a720_1499781763890712576/FI_T1.csv",
         "source_table": "FI_T1",
-        "key_fields": [
-          "Stkcd",
-          "Accper"
-        ],
-        "variable_names": [
-          "Leverage"
+        "key_fields": ["Stkcd", "Accper"],
+        "variable_names": ["Leverage"],
+        "variable_mappings": [
+          {
+            "variable_name": "Leverage",
+            "source_fields": ["F011201A"],
+            "match_kind": "direct_field",
+            "evidence": "CSMAR 字段 F011201A 即资产负债率（总负债/总资产）"
+          }
         ]
       },
       {
         "path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/01_capital_structure_roa/财务报表_FS_Combas/download_260e80e515_1499781794144227328/FS_Combas.csv",
         "source_table": "FS_Combas",
-        "key_fields": [
-          "Stkcd",
-          "Accper"
-        ],
-        "variable_names": [
-          "Size"
+        "key_fields": ["Stkcd", "Accper"],
+        "variable_names": ["Size"],
+        "variable_mappings": [
+          {
+            "variable_name": "Size",
+            "source_fields": ["A001000000"],
+            "match_kind": "derived",
+            "evidence": "A001000000 为总资产，Size 是其自然对数 ln(A001000000)"
+          }
         ]
       },
       {
         "path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/01_capital_structure_roa/财务指标分析_FI_T8/download_838f7191fa_1499781850444369920/FI_T8.csv",
         "source_table": "FI_T8",
-        "key_fields": [
-          "Stkcd",
-          "Accper"
-        ],
-        "variable_names": [
-          "Growth"
+        "key_fields": ["Stkcd", "Accper"],
+        "variable_names": ["Growth"],
+        "variable_mappings": [
+          {
+            "variable_name": "Growth",
+            "source_fields": ["F081601B"],
+            "match_kind": "direct_field",
+            "evidence": "CSMAR 字段 F081601B 即营业收入增长率"
+          }
         ]
       },
       {
         "path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/01_capital_structure_roa/股东_HLD_CR/download_f886942a7f_1499781882442715136/HLD_CR.csv",
         "source_table": "HLD_CR",
-        "key_fields": [
-          "Stkcd",
-          "Reptdt"
-        ],
-        "variable_names": [
-          "Top1"
+        "key_fields": ["Stkcd", "Reptdt"],
+        "variable_names": ["Top1"],
+        "variable_mappings": [
+          {
+            "variable_name": "Top1",
+            "source_fields": ["Shrcr1"],
+            "match_kind": "direct_field",
+            "evidence": "Shrcr1 即第一大股东持股比例"
+          }
         ]
       },
       {
         "path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/01_capital_structure_roa/上市公司基本信息_STK_LISTEDCOINFOANL/download_bd5aec624c_1499781867502604288/STK_LISTEDCOINFOANL.csv",
         "source_table": "STK_LISTEDCOINFOANL",
-        "key_fields": [
-          "Symbol",
-          "EndDate"
-        ],
-        "variable_names": [
-          "FirmAge"
+        "key_fields": ["Symbol", "EndDate"],
+        "variable_names": ["FirmAge"],
+        "variable_mappings": [
+          {
+            "variable_name": "FirmAge",
+            "source_fields": ["EstablishDate", "EndDate"],
+            "match_kind": "derived",
+            "evidence": "FirmAge = year(EndDate) - year(EstablishDate)"
+          }
         ]
       },
       {
         "path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/01_capital_structure_roa/治理结构_CG_ManagerShareSalary/download_1de5a2a6e1_1499781897689010176/CG_ManagerShareSalary.csv",
         "source_table": "CG_ManagerShareSalary",
-        "key_fields": [
-          "Symbol",
-          "Enddate"
-        ],
-        "variable_names": [
-          "BoardSize"
+        "key_fields": ["Symbol", "Enddate"],
+        "variable_names": ["BoardSize"],
+        "variable_mappings": [
+          {
+            "variable_name": "BoardSize",
+            "source_fields": ["DirectorNumber"],
+            "match_kind": "direct_field",
+            "evidence": "DirectorNumber 即董事人数"
+          }
         ]
       }
     ]

@@ -64,7 +64,6 @@ def test_make_downloaded_files_carries_variable_mappings() -> None:
                 "variable_name": "Age",
                 "source_fields": ["EstablishDate"],
                 "match_kind": "derived",
-                "transform": {"op": "firm_age", "date_field": "EstablishDate"},
                 "evidence": "企业年龄可由成立日期构造",
             }
         ],

@@ -44,7 +44,6 @@ _MERGED_FILENAME = "merged.csv"
 _STAGE_DIRNAME = "_stage"
 _SRC_PREFIX = "src_"
 _PREVIEW_ROWS = 20
-_SAMPLE_ROWS = 3
 # 严格的 SQL 标识符白名单：ASCII 字母/数字/下划线，且不以数字开头。
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # DuckDB 对 DDL/DML/SET 会返回 0~1 行的 'Count' 或 'Success' 元信息列。
@@ -122,39 +121,6 @@ def _register_sources(conn: DuckDBPyConnection, files: list[DownloadedFile]) -> 
     return view_names
 
 
-def _probe_sources_for_prompt(
-    conn: DuckDBPyConnection,
-    files: list[DownloadedFile],
-    view_names: list[str],
-) -> list[str]:
-    """为每个已注册视图采集 schema + 前 3 行样本，拼成可注入 HumanMessage 的描述块。
-
-    提前把 schema 与样本注入 prompt，可以把 LLM 原本花在 DESCRIBE/SELECT LIMIT
-    上的若干 ReAct 回合省掉，直接进入写清洗 SQL 的阶段。
-    """
-    blocks: list[str] = []
-    for i, (f, view_name) in enumerate(zip(files, view_names, strict=True), start=1):
-        schema_df = conn.execute(f'DESCRIBE "{view_name}"').fetchdf()
-        schema_lines = [
-            f"     - {row['column_name']}: {row['column_type']}" for _, row in schema_df.iterrows()
-        ]
-        sample_df = conn.execute(f'SELECT * FROM "{view_name}" LIMIT {_SAMPLE_ROWS}').fetchdf()
-        sample_txt = sample_df.to_string(index=False) if len(sample_df) > 0 else "(empty table)"
-        mappings_txt = _format_variable_mappings(f.get("variable_mappings"))
-        block = (
-            f"{i}. path={f['path']}\n"
-            f"   source_table={f['source_table']}  (registered view: {view_name})\n"
-            f"   key_fields={f['key_fields']}\n"
-            f"   variable_names={f['variable_names']}\n"
-            f"   variable_mappings:\n{mappings_txt}\n"
-            f"   schema:\n"
-            + "\n".join(schema_lines)
-            + f"\n   sample (first {_SAMPLE_ROWS} rows):\n{sample_txt}"
-        )
-        blocks.append(block)
-    return blocks
-
-
 def _format_variable_mappings(raw: object) -> str:
     if not isinstance(raw, list) or not raw:
         return "[]"
@@ -164,9 +130,21 @@ def _format_variable_mappings(raw: object) -> str:
         return str(raw)
 
 
+def _format_source_block(idx: int, f: DownloadedFile) -> str:
+    view_name = f"{_SRC_PREFIX}{f['source_table']}"
+    mappings_txt = _format_variable_mappings(f.get("variable_mappings"))
+    return (
+        f"{idx}. path={f['path']}\n"
+        f"   source_table={f['source_table']}  (registered view: {view_name})\n"
+        f"   key_fields={f['key_fields']}\n"
+        f"   variable_names={f['variable_names']}\n"
+        f"   variable_mappings:\n{mappings_txt}"
+    )
+
+
 def _build_human_prompt(
     spec: EmpiricalSpec,
-    source_blocks: list[str],
+    files: list[DownloadedFile],
     output_path: Path,
 ) -> str:
     return (
@@ -182,7 +160,9 @@ def _build_human_prompt(
         "Use variable_mappings under each source view to decide which raw fields feed each"
         " final variable. Final variable columns must align with EmpiricalSpec.variables[*].name"
         " (snake_case form is acceptable for Stata-safe columns).\n\n"
-        f"## pre-registered source views\n" + "\n\n".join(source_blocks) + "\n\n"
+        f"## pre-registered source views\n"
+        + "\n\n".join(_format_source_block(i, f) for i, f in enumerate(files, start=1))
+        + "\n\n"
         f"## output_path (node will export final_view here; do NOT COPY yourself)\n"
         f"{output_path}\n\n"
         "Build a single long-format view/table that merges the sources, then return"
@@ -224,12 +204,13 @@ def _make_sql_tool(conn: DuckDBPyConnection) -> BaseTool:
         SQL 错误返回 ``"ERROR: <类型>: <消息>"`` 字符串，工具自身不抛异常，
         以便 Agent 根据错误自行修正重跑。
         """
+        cursor = conn.cursor()
         try:
-            cursor = conn.execute(query)
-            if cursor is None:
-                # DuckDB 对 comment-only / 空语句返回 None，避免后续 .fetchdf() 炸 AttributeError
+            result = cursor.execute(query)
+            if result is None:
+                # DuckDB 对 comment-only / 空语句返回 None,避免后续 .fetchdf() 炸 AttributeError
                 return "OK (no executable statement)"
-            df = cursor.fetchdf()
+            df = result.fetchdf()
         except duckdb.Error as exc:
             return f"ERROR: {type(exc).__name__}: {exc}"
         except Exception as exc:
@@ -369,14 +350,13 @@ async def data_cleaning(state: WorkflowState) -> MergedDataset:
 
     conn = duckdb.connect(":memory:")
     try:
-        view_names = _register_sources(conn, files)
-        source_blocks = _probe_sources_for_prompt(conn, files, view_names)
+        _register_sources(conn, files)
         sql_tool = _make_sql_tool(conn)
         payload, _ = await run_structured_agent(
             tools=[sql_tool],
             system_prompt=load_prompt("data_cleaning"),
             output_schema=_CleaningOutput,
-            human_message=_build_human_prompt(spec, source_blocks, output_path),
+            human_message=_build_human_prompt(spec, files, output_path),
             max_iterations=_MAX_ITERATIONS,
             node_name="data_cleaning",
         )

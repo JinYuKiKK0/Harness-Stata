@@ -152,11 +152,11 @@ probe_subgraph START
 
 - input：`EmpiricalSpec` + `ModelPlan`
 - action（拆为两阶段）：
-  - **阶段一 可得性发现（Agent）**：Planning Agent 用 `csmar_list_tables` 给出每个变量的 (target_db, candidate_tables[])，代码层批量调 `csmar_bulk_schema` 拉 schema，Verification 分桶判定变量是否可由表内字段直接取得、语义等价取得或确定性构造；hard 变量仍 not_found 时启用 Fallback ReAct（`csmar_list_tables` + `csmar_get_table_schema` 两件套）。整阶段输出 `(database, table, field, source_fields, key_fields, match_kind, transform, evidence, filters.condition?)` 与 status；**不再估算 record_count / 行数**
+  - **阶段一 可得性发现（Agent）**：Planning Agent 用 `csmar_list_tables` 给出每个变量的 (target_db, candidate_tables[])，代码层批量调 `csmar_bulk_schema` 拉 schema，Verification 分桶判定变量是否可由表内字段直接取得、语义等价取得或派生构造；hard 变量仍 not_found 时启用 Fallback ReAct（`csmar_list_tables` + `csmar_get_table_schema` 两件套）。整阶段输出 `(database, table, field, source_fields, key_fields, match_kind, evidence, filters.condition?)` 与 status；**不再估算 record_count / 行数**
   - **阶段二 覆盖率验证（代码）**：对阶段一所有 found 的 `key_fields + source_fields` 批量调用 `csmar_probe_query`（dry-run），用 MCP 自带的 `can_materialize` / `invalid_columns` 作为门禁；通过即写入 `DownloadManifest`，失败则等同 `not_found` 走与字段未找到一致的 Hard/Soft 路由
   - 若 Hard Contract 变量在任一阶段失败，立即整体硬失败
   - 若 Soft Contract 变量在任一阶段失败,直接记 `not_found`,不再尝试替代变量
-- output：`ProbeReport`（逐变量可得性结论）+ `DownloadManifest`（具体到 database/table/source_fields/transform/过滤条件的下载参数清单）
+- output：`ProbeReport`（逐变量可得性结论）+ `DownloadManifest`（具体到 database/table/source_fields/过滤条件的下载参数清单）
 
 ### Human In the Loop
 
@@ -172,7 +172,7 @@ probe_subgraph START
 ### 数据批量获取
 
 - input：`DownloadManifest`
-- action：纯代码解析 DownloadManifest 中的下载参数，调用 csmar_mcp 提供的 tools 下载所有原料字段；本节点不解释 transform
+- action：纯代码解析 DownloadManifest 中的下载参数，调用 csmar_mcp 提供的 tools 下载所有原料字段；本节点不做派生
 - output：`DownloadedFiles`——所有下载文件的路径清单
 
 ### 数据清洗

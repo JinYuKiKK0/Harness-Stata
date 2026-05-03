@@ -53,7 +53,6 @@ class VariableMapping(TypedDict):
     variable_name: str
     source_fields: list[str]
     match_kind: ProbeMatchKind
-    transform: dict[str, object] | None
     evidence: NotRequired[str | None]
 
 
@@ -64,7 +63,6 @@ class VariableProbeResult(TypedDict):
     record_count: int | None
     match_kind: NotRequired[ProbeMatchKind | None]
     source_fields: NotRequired[list[str]]
-    transform: NotRequired[dict[str, object] | None]
     evidence: NotRequired[str | None]
 
 

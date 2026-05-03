@@ -11,14 +11,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import duckdb
 import pandas as pd
 import pytest
 
 from harness_stata.nodes.data_cleaning import (
     _build_human_prompt,
-    _probe_sources_for_prompt,
-    _register_sources,
     data_cleaning,
 )
 from harness_stata.state import DownloadedFile, EmpiricalSpec, WorkflowState
@@ -102,19 +99,11 @@ def test_data_cleaning_prompt_includes_variable_mappings(
             "variable_name": "ROA",
             "source_fields": ["roa"],
             "match_kind": "direct_field",
-            "transform": {"op": "pass_through"},
             "evidence": "字段即总资产收益率",
         }
     ]
 
-    conn = duckdb.connect(":memory:")
-    try:
-        view_names = _register_sources(conn, [file_])
-        source_blocks = _probe_sources_for_prompt(conn, [file_], view_names)
-    finally:
-        conn.close()
-
-    prompt = _build_human_prompt(make_empirical_spec(), source_blocks, tmp_path / "merged.csv")
+    prompt = _build_human_prompt(make_empirical_spec(), [file_], tmp_path / "merged.csv")
 
     assert "variable_mappings" in prompt
     assert '"variable_name": "ROA"' in prompt

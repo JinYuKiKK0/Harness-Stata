@@ -172,7 +172,6 @@ def _make_downloaded_files(task: DownloadTask, files: Sequence[str]) -> list[Dow
                     "variable_name": m["variable_name"],
                     "source_fields": list(m["source_fields"]),
                     "match_kind": m["match_kind"],
-                    "transform": dict(m["transform"]) if m["transform"] is not None else None,
                     "evidence": m.get("evidence"),
                 }
                 for m in variable_mappings

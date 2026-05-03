@@ -16,7 +16,6 @@ from harness_stata.subgraphs.probe.pure import (
     bucket_plans,
     build_probe_query_payload,
     ensure_manifest,
-    finding_mapping_failure_reason,
     format_schema_for_prompt,
     merge_bucket_results,
     merge_into_manifest,
@@ -324,7 +323,6 @@ class TestMergeBucketResults:
                             field="EstablishDate",
                             source_fields=["EstablishDate"],
                             match_kind="derived",
-                            transform={"op": "firm_age", "date_field": "EstablishDate"},
                             key_fields=["Stkcd", "AccYear"],
                             evidence="企业年龄可由成立日期和样本年份构造",
                         )
@@ -338,7 +336,6 @@ class TestMergeBucketResults:
         assert finding.match_kind == "derived"
         assert finding.source_fields == ["EstablishDate"]
         assert finding.field == "EstablishDate"
-        assert finding.transform == {"op": "firm_age", "date_field": "EstablishDate"}
 
     def test_invalid_source_field_drops_to_not_found(self) -> None:
         age = _var("Age", description="企业年龄")
@@ -354,7 +351,6 @@ class TestMergeBucketResults:
                             field="EstablishDate",
                             source_fields=["EstablishDate"],
                             match_kind="derived",
-                            transform={"op": "firm_age", "date_field": "EstablishDate"},
                             key_fields=["Stkcd", "AccYear"],
                         )
                     ]
@@ -378,7 +374,6 @@ class TestMergeBucketResults:
                             field="ROA",
                             source_fields=["ROA"],
                             match_kind="direct_field",
-                            transform={"op": "pass_through"},
                             key_fields=["FakeKey"],
                         )
                     ]
@@ -387,33 +382,6 @@ class TestMergeBucketResults:
         ]
         results = merge_bucket_results(bucket_outputs, [roa], schema_dict)
         assert results[0][1].status == "not_found"
-
-    def test_transform_reference_outside_source_fields_drops_to_not_found(self) -> None:
-        age = _var("Age", description="企业年龄")
-        schema_dict = {
-            "T1": [{"field_code": "Stkcd"}, {"field_code": "EstablishDate"}]
-        }
-        bucket_outputs = [
-            (
-                BucketKey("DB", "T1"),
-                BucketVerificationOutput(
-                    results=[
-                        BucketVariableFinding(
-                            variable_name="Age",
-                            status="found",
-                            field="EstablishDate",
-                            source_fields=["EstablishDate"],
-                            match_kind="derived",
-                            transform={"op": "firm_age", "date_field": "FakeDate"},
-                            key_fields=["Stkcd"],
-                        )
-                    ]
-                ),
-            )
-        ]
-        results = merge_bucket_results(bucket_outputs, [age], schema_dict)
-        assert results[0][1].status == "not_found"
-
 
 # ---------------------------------------------------------------------------
 # manifest + probe payload
@@ -437,7 +405,6 @@ class TestManifestAndProbePayload:
                 field="EstablishDate",
                 source_fields=["EstablishDate"],
                 match_kind="derived",
-                transform={"op": "firm_age", "date_field": "EstablishDate"},
                 key_fields=["Stkcd", "AccYear"],
                 evidence="企业年龄可由成立日期构造",
             ),
@@ -453,7 +420,6 @@ class TestManifestAndProbePayload:
                 field="CashRecoveryRate",
                 source_fields=["CashRecoveryRate"],
                 match_kind="semantic_equivalent",
-                transform={"op": "pass_through"},
                 key_fields=["Stkcd", "AccYear"],
                 evidence="字段定义与经营现金流/总资产口径一致",
             ),
@@ -471,14 +437,12 @@ class TestManifestAndProbePayload:
                 "variable_name": "Age",
                 "source_fields": ["EstablishDate"],
                 "match_kind": "derived",
-                "transform": {"op": "firm_age", "date_field": "EstablishDate"},
                 "evidence": "企业年龄可由成立日期构造",
             },
             {
                 "variable_name": "CashFlow",
                 "source_fields": ["CashRecoveryRate"],
                 "match_kind": "semantic_equivalent",
-                "transform": {"op": "pass_through"},
                 "evidence": "字段定义与经营现金流/总资产口径一致",
             },
         ]
@@ -492,7 +456,6 @@ class TestManifestAndProbePayload:
             field="EstablishDate",
             source_fields=["EstablishDate"],
             match_kind="derived",
-            transform={"op": "firm_age", "date_field": "EstablishDate"},
             key_fields=["Stkcd", "AccYear"],
         )
 
@@ -502,23 +465,6 @@ class TestManifestAndProbePayload:
         assert payload["columns"] == ["Stkcd", "AccYear", "EstablishDate"]
         assert payload["start_date"] == "2010-01-01"
         assert payload["end_date"] == "2020-12-31"
-
-    def test_finding_mapping_failure_reason_rejects_bad_transform_reference(self) -> None:
-        finding = VariableProbeFindingModel(
-            status="found",
-            database="CSMAR",
-            table="T1",
-            field="EstablishDate",
-            source_fields=["EstablishDate"],
-            match_kind="derived",
-            transform={"op": "firm_age", "date_field": "FakeDate"},
-            key_fields=["Stkcd"],
-        )
-
-        reason = finding_mapping_failure_reason(finding)
-
-        assert reason is not None
-        assert "unusable transform" in reason
 
 
 # ---------------------------------------------------------------------------

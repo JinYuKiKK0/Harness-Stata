@@ -24,20 +24,13 @@
 3. 从表名中挑少量最相关候选表,用 `csmar_get_table_schema` 精读。
 4. 在 schema 的 `field_code` / `field_label` 中寻找可用字段;`field_key` 列(典型值 `Code` 主键 / `Date` 时间维)用于挑选 `key_fields`。
 5. 若字段定义与变量定义一致但名称不同,可用 `semantic_equivalent`。
-6. 若变量可由同表原料字段确定性构造,可用 `derived`。仅支持 `firm_age`, `ratio`, `log`。
+6. 若变量可由同表原料字段派生构造,可用 `derived`,在 `source_fields` 列全部原料字段;具体公式由下游 cleaning 阶段按变量 description 决定。
 7. 公式不明确、口径只是近似代理、或需要外部信息时输出 `not_found`。
 8. 找到明确可得性结论就停止;两轮工具调用后仍不确定,输出 `not_found`。
 
-## transform 示例
-
-- 直接/语义等价: `{"op":"pass_through"}`
-- 企业年龄: `{"op":"firm_age","date_field":"EstablishDate"}`。年龄按样本时间维计算,不是按当前年份。
-- 比率: `{"op":"ratio","numerator":"CFO","denominator":"TotalAssets"}`
-- 对数: `{"op":"log","field":"TotalAssets"}`
-
 ## 输出约束
 
-- `found` 时,`database`, `table`, `field`, `source_fields`, `key_fields`, `match_kind`, `transform` 必填。
+- `found` 时,`database`, `table`, `field`, `source_fields`, `key_fields`, `match_kind` 必填。
 - `field` 是兼容字段,必须等于 `source_fields[0]`。
 - `database` 必须逐字来自已购数据库清单。
 - `table`, `field`, `source_fields`, `key_fields` 必须逐字来自工具返回结果。

@@ -65,47 +65,75 @@
       {
         "path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/02_digital_finance_liquidity/BANK_LIQUIDITY/中国各银行流动性创造（2012-2023年）.csv",
         "source_table": "BANK_LIQUIDITY",
-        "key_fields": [
-          "代码",
-          "年份"
-        ],
-        "variable_names": [
-          "LC",
-          "Size"
+        "key_fields": ["代码", "年份"],
+        "variable_names": ["LC", "Size"],
+        "variable_mappings": [
+          {
+            "variable_name": "LC",
+            "source_fields": ["总表内流动性创造"],
+            "match_kind": "semantic_equivalent",
+            "evidence": "字段「总表内流动性创造」即 Berger-Bouwman 方法计算的表内流动性创造,已按总资产标准化(VARCHAR 含脏值,需 TRY_CAST)。bank_id=代码(数字),与其他表 6 位 Bankcd 不一致需 LPAD 对齐"
+          },
+          {
+            "variable_name": "Size",
+            "source_fields": ["资产总计"],
+            "match_kind": "derived",
+            "evidence": "Size = ln(资产总计)"
+          }
         ]
       },
       {
         "path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/02_digital_finance_liquidity/BANK_METRICS/BANK_Combas(Merge Query).csv",
         "source_table": "BANK_METRICS_MERGE",
-        "key_fields": [
-          "BANK_Combas.Bankcd",
-          "BANK_Combas.Accper"
-        ],
-        "variable_names": [
-          "ROE",
-          "NPL_ctrl",
-          "CIR"
+        "key_fields": ["BANK_Combas.Bankcd", "BANK_Combas.Accper"],
+        "variable_names": ["ROE", "NPL_ctrl", "CIR"],
+        "variable_mappings": [
+          {
+            "variable_name": "ROE",
+            "source_fields": ["BANK_Index.ROE"],
+            "match_kind": "direct_field",
+            "evidence": "字段名直接是 ROE 净资产收益率(VARCHAR,需 TRY_CAST)"
+          },
+          {
+            "variable_name": "NPL_ctrl",
+            "source_fields": ["BANK_Loan.Nplra"],
+            "match_kind": "semantic_equivalent",
+            "evidence": "Nplra = Non-Performing Loan ratio,即不良贷款率(VARCHAR,需 TRY_CAST)"
+          },
+          {
+            "variable_name": "CIR",
+            "source_fields": ["BANK_MarketRisk.CostToIncomeRatio"],
+            "match_kind": "direct_field",
+            "evidence": "字段名直接是 CostToIncomeRatio 成本收入比(VARCHAR,需 TRY_CAST)"
+          }
         ]
       },
       {
         "path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/02_digital_finance_liquidity/DIGITAL_FINANCE/finance.csv",
         "source_table": "DIGITAL_FINANCE",
-        "key_fields": [
-          "prov_code",
-          "year"
-        ],
-        "variable_names": [
-          "DIFI"
+        "key_fields": ["prov_code", "year"],
+        "variable_names": ["DIFI"],
+        "variable_mappings": [
+          {
+            "variable_name": "DIFI",
+            "source_fields": ["index_aggregate"],
+            "match_kind": "derived",
+            "evidence": "DIFI = index_aggregate / 100。本表为省级粒度(prov_code),需通过 BANK_Info.ProvinceName 将银行 → 省份后再 JOIN"
+          }
         ]
       },
       {
         "path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/02_digital_finance_liquidity/BANK_Info.csv",
         "source_table": "BANK_Info",
-        "key_fields": [
-          "Bankcd"
-        ],
-        "variable_names": [
-          "ProvinceName"
+        "key_fields": ["Bankcd"],
+        "variable_names": ["ProvinceName"],
+        "variable_mappings": [
+          {
+            "variable_name": "ProvinceName",
+            "source_fields": ["ProvinceName"],
+            "match_kind": "direct_field",
+            "evidence": "字段直接是 ProvinceName 银行总部所在省份名称。本表为银行档案(无年份维度),需对每个银行按 (firm_id, year) 广播"
+          }
         ]
       }
     ]
