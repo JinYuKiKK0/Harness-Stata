@@ -44,4 +44,6 @@
 
 ## 通用 / 跨组件
 
-(暂无条目)
+### [x] DuckDB `read_csv(na_values=...)` 覆盖默认空串语义 — [依赖坑]
+**现象/根因** — 不传 `na_values` 时,DuckDB sniffer 把 unquoted 空 cell `,,` 视为 NULL,数值列正常推断为 `DOUBLE`。一旦传入 `na_values=[...]`,该列表会**覆盖**(而非追加)默认 NULL 集合,空字符串不再被当作 NULL,任何含空 cell 的列都会回落到 `VARCHAR`——比不传还糟。
+**方案** — `na_values` 列表必须始终包含 `""`。Harness-Stata 在 `src/harness_stata/nodes/data_cleaning.py::_NULL_TOKENS` 把 `""` 与 7 个 Excel 错误码(`#DIV/0!` 等)一起注入 `read_csv`,既消除脏值导致的 VARCHAR 退化,又保留默认空串语义。`tests/nodes/test_data_cleaning.py::test_register_sources_recovers_double_dtype_under_excel_pollution` 守住这条不变量。

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -39,7 +40,7 @@ from harness_stata.state import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_MAX_ITERATIONS = 40
+_MAX_ITERATIONS = 50
 _MERGED_FILENAME = "merged.csv"
 _STAGE_DIRNAME = "_stage"
 _SRC_PREFIX = "src_"
@@ -48,6 +49,32 @@ _PREVIEW_ROWS = 20
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # DuckDB 对 DDL/DML/SET 会返回 0~1 行的 'Count' 或 'Success' 元信息列。
 _META_RESULT_COLUMNS = frozenset({"Count", "Success"})
+# CSV 注册阶段统一视为 NULL 的字符串令牌:Excel 全部公式错误码 + 空字符串。
+#
+# 这是封闭集 — 列表对应 Microsoft Excel 公式引擎机器生成的错误码全集
+# (Excel 2016 经典 7 种 + Excel 365 动态数组 3 种),不会随业务扩展。所有错误
+# 码均无业务歧义,把它们当 NULL 不会误伤合法数据。人手 NA 标记
+# (``"NA"`` / ``"无"`` / ``"-"`` 等)与千分位/货币符号有歧义或属类型转换范畴,
+# 故意不在此列;遇到时由 prompt 教导的 ``TRY_CAST`` 在 SQL 层兜底。
+#
+# 关键:必须包含 ``""``。DuckDB 的 ``read_csv(na_values=...)`` 会**覆盖**默认
+# 的「空字符串视为 NULL」行为,只把列出的字符串当作 NULL。如果遗漏 ``""``,
+# 任何含空 cell 的数值列都会被推断为 VARCHAR,反而比不传 ``na_values`` 更糟。
+_NULL_TOKENS = (
+    "",
+    # Excel 2016 及之前的经典公式错误码
+    "#DIV/0!",
+    "#N/A",
+    "#REF!",
+    "#VALUE!",
+    "#NUM!",
+    "#NAME?",
+    "#NULL!",
+    # Excel 365 动态数组新增错误码
+    "#SPILL!",
+    "#CALC!",
+    "#FIELD!",
+)
 
 
 class _CleaningOutput(BaseModel):
@@ -67,14 +94,18 @@ def _validate(state: WorkflowState) -> str | None:
 
 
 def _derive_output_path(files: list[DownloadedFile]) -> Path:
-    """把合并产物放在 F18 的会话目录下：``<session>/merged.csv``。
+    """把合并产物放在所有源文件的最深公共父目录下：``<session>/merged.csv``。
 
-    ``files[*].path`` 已由 F18 保证为绝对路径，此处刻意不调用
-    ``Path.resolve()``——Windows 下 resolve 会在事件循环里触发
-    ``os.getcwd()``，被 ``langgraph dev`` 的 blockbuster 拦截。
+    生产路径为 ``<root>/<utc_ts>/<db_table>/<file>.csv``,公共父 = ``<root>/<utc_ts>``;
+    fixture 可能是 1~3 层任意结构,公共父始终是 fixture 自身根目录。语义与目录深度无关。
+
+    ``files[*].path`` 已由 F18 保证为绝对路径,此处刻意不调用 ``Path.resolve()``——
+    Windows 下 resolve 会在事件循环里触发 ``os.getcwd()``,被 ``langgraph dev``
+    的 blockbuster 拦截。
     """
-    first = Path(files[0]["path"])
-    return first.parents[1] / _MERGED_FILENAME
+    parents = [str(Path(f["path"]).parent) for f in files]
+    common = Path(os.path.commonpath(parents))
+    return common / _MERGED_FILENAME
 
 
 def _format_variables(variables: list[VariableDefinition]) -> str:
@@ -89,6 +120,11 @@ def _register_sources(conn: DuckDBPyConnection, files: list[DownloadedFile]) -> 
     视图落在 ``main`` schema。``source_table`` 必须先通过 :data:`_IDENT_RE`
     白名单校验，才能进入 SQL 标识符位置拼接。文件路径通过 DuckDB Python
     relation API（``conn.read_csv``）传入，避免任何字符串级 SQL 拼接。
+
+    通过 ``na_values=_NULL_TOKENS`` 把 Excel 错误字符串与空字符串统一视为
+    NULL,让 DuckDB 类型推断把含脏值的数值列回归 ``DOUBLE``,避免下游 SQL
+    反复 ``TRY_CAST``。详见 ``docs/pitfalls.md`` 关于 ``read_csv(na_values=)``
+    覆盖默认空串语义的依赖坑。
 
     返回按输入顺序排列的视图名列表。
     """
@@ -105,7 +141,7 @@ def _register_sources(conn: DuckDBPyConnection, files: list[DownloadedFile]) -> 
         path = Path(f["path"])
         suffix = path.suffix.lower()
         if suffix == ".csv":
-            rel = conn.read_csv(str(path))
+            rel = conn.read_csv(str(path), na_values=list(_NULL_TOKENS))
         elif suffix in (".xlsx", ".xls"):
             msg = (
                 f"data_cleaning: xlsx support deferred; upstream must emit CSV for MVP"

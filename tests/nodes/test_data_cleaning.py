@@ -11,11 +11,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import duckdb
 import pandas as pd
 import pytest
 
 from harness_stata.nodes.data_cleaning import (
     _build_human_prompt,
+    _derive_output_path,
+    _register_sources,
     data_cleaning,
 )
 from harness_stata.state import DownloadedFile, EmpiricalSpec, WorkflowState
@@ -85,6 +88,65 @@ def test_data_cleaning_xlsx_source_raises_not_implemented(
     state = _base_state(make_empirical_spec(), [_make_downloaded_file(xlsx)])
     with pytest.raises(NotImplementedError, match="xlsx"):
         _run(state)
+
+
+def test_derive_output_path_deep_layout() -> None:
+    """生产形态 ``<root>/<utc_ts>/<db_table>/<file>.csv``——公共父 = ``<root>/<utc_ts>``。"""
+    files: list[DownloadedFile] = [
+        _make_downloaded_file(Path("/r/2026/CSMAR_FS/a.csv"), source_table="FS"),
+        _make_downloaded_file(Path("/r/2026/CSMAR_FI/b.csv"), source_table="FI"),
+    ]
+    assert _derive_output_path(files) == Path("/r/2026/merged.csv")
+
+
+def test_derive_output_path_flat_layout() -> None:
+    """fixture 扁平形态 ``<root>/<file>.csv``——公共父 = ``<root>`` 自身。"""
+    files: list[DownloadedFile] = [
+        _make_downloaded_file(Path("/fx/03/x.csv"), source_table="X"),
+        _make_downloaded_file(Path("/fx/03/y.csv"), source_table="Y"),
+    ]
+    assert _derive_output_path(files) == Path("/fx/03/merged.csv")
+
+
+def test_derive_output_path_three_level_layout() -> None:
+    """fixture 三层形态 ``<root>/<table_dir>/<dl_dir>/<file>.csv``——公共父 = ``<root>``。"""
+    files: list[DownloadedFile] = [
+        _make_downloaded_file(Path("/fx/01/T5/dl_a/a.csv"), source_table="T5"),
+        _make_downloaded_file(Path("/fx/01/T1/dl_b/b.csv"), source_table="T1"),
+    ]
+    assert _derive_output_path(files) == Path("/fx/01/merged.csv")
+
+
+def test_register_sources_recovers_double_dtype_under_excel_pollution(tmp_path: Path) -> None:
+    """脏 CSV(含 ``#DIV/0!`` 与空 cell)注册后,数值列必须被推断为 ``DOUBLE``。
+
+    防回归:DuckDB ``read_csv(na_values=...)`` 会**覆盖**默认空串语义,
+    若 ``_NULL_TOKENS`` 漏 ``""``,任何含空 cell 的列都会落回 VARCHAR。
+    """
+    csv_path = tmp_path / "dirty.csv"
+    csv_path.write_text(
+        "stkcd,year,ratio,asset\n"
+        "1,2020,0.5,1000\n"
+        "2,2020,#DIV/0!,2000\n"
+        "3,2020,0.7,\n"
+        "4,2020,#N/A,3000\n"
+        # Excel 365 dynamic-array errors must also be recognized
+        "5,2020,#SPILL!,#CALC!\n"
+        "6,2020,#FIELD!,4000\n",
+        encoding="utf-8",
+    )
+    file_ = _make_downloaded_file(csv_path, source_table="DIRTY")
+    conn = duckdb.connect(":memory:")
+    try:
+        _register_sources(conn, [file_])
+        rows = conn.execute("DESCRIBE src_DIRTY").fetchall()
+        schema = {row[0]: row[1] for row in rows}
+    finally:
+        conn.close()
+    assert schema["ratio"] == "DOUBLE", f"脏值列应回归 DOUBLE,实际 {schema['ratio']}"
+    assert schema["asset"] == "BIGINT" or schema["asset"] == "DOUBLE", (
+        f"空 cell 列应被推断为数值,实际 {schema['asset']}"
+    )
 
 
 def test_data_cleaning_prompt_includes_variable_mappings(
