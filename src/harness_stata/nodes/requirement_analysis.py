@@ -41,9 +41,7 @@ class _EmpiricalSpecModel(BaseModel):
     sample_scope: str = Field(description="样本范围, 直接取自用户输入")
     time_range_start: str = Field(description="起始年份, 直接取自用户输入")
     time_range_end: str = Field(description="结束年份, 直接取自用户输入")
-    data_frequency: Literal["yearly", "quarterly", "monthly", "daily"] = Field(
-        description="数据频率, 直接取自用户输入"
-    )
+    data_frequency: Literal["yearly", "monthly"] = Field(description="数据频率, 直接取自用户输入")
     analysis_granularity: str = Field(description="分析粒度, e.g. 公司-年度")
 
 
@@ -79,9 +77,7 @@ def _format_user_message(user_req: UserRequest) -> str:
     """Format UserRequest fields into a human-readable message for the LLM."""
     freq_map: dict[str, str] = {
         "yearly": "年度",
-        "quarterly": "季度",
         "monthly": "月度",
-        "daily": "日度",
     }
     freq_label = freq_map.get(user_req["data_frequency"], user_req["data_frequency"])
 

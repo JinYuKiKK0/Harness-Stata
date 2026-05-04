@@ -24,7 +24,7 @@ class UserRequest(TypedDict):
     sample_scope: str
     time_range_start: str
     time_range_end: str
-    data_frequency: Literal["yearly", "quarterly", "monthly", "daily"]
+    data_frequency: Literal["yearly", "monthly"]
 
 
 class VariableDefinition(TypedDict):
@@ -102,7 +102,7 @@ class EmpiricalSpec(TypedDict):
     sample_scope: str
     time_range_start: str
     time_range_end: str
-    data_frequency: Literal["yearly", "quarterly", "monthly", "daily"]
+    data_frequency: Literal["yearly", "monthly"]
     analysis_granularity: str
 
 

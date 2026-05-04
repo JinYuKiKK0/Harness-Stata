@@ -83,7 +83,7 @@
             "variable_name": "ROA",
             "source_fields": ["ROAA"],
             "match_kind": "semantic_equivalent",
-            "evidence": "ROAA = Return on Average Assets,即「净利润/平均总资产」,与 ROA 描述对齐(本表无 ROA 字段)"
+            "evidence": "ROAA = Return on Average Assets,即净利润/平均总资产,与 ROA 描述对齐"
           }
         ]
       },
@@ -125,7 +125,7 @@
             "variable_name": "ProvinceName",
             "source_fields": ["ProvinceName"],
             "match_kind": "direct_field",
-            "evidence": "字段直接是 ProvinceName 银行总部所在省份。本表无年份维度,需对每个银行按 (firm_id, year) 广播"
+            "evidence": "字段即 ProvinceName 银行总部所在省份"
           }
         ]
       },
@@ -139,7 +139,7 @@
             "variable_name": "DIF",
             "source_fields": ["index_aggregate"],
             "match_kind": "derived",
-            "evidence": "DIF = index_aggregate / 100。本表为省级粒度,需通过 BANK_Info.ProvinceName 把银行映射到省份后 JOIN"
+            "evidence": "DIF = index_aggregate / 100"
           },
           {
             "variable_name": "COV",
@@ -171,7 +171,7 @@
             "variable_name": "GDPg",
             "source_fields": ["gdp"],
             "match_kind": "derived",
-            "evidence": "GDPg = 同比增长率 = (gdp[t] - gdp[t-1]) / gdp[t-1],用 LAG OVER (PARTITION BY province ORDER BY year) 计算。最终通过 BANK_Info.ProvinceName 把银行映射到 province 后 JOIN"
+            "evidence": "GDPg = (gdp[t] - gdp[t-1]) / gdp[t-1],省份级 GDP 同比增长率"
           }
         ]
       }

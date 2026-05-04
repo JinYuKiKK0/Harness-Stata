@@ -54,9 +54,7 @@ def _config_summary() -> dict[str, str]:
 
 class DataFrequency(StrEnum):
     YEARLY = "yearly"
-    QUARTERLY = "quarterly"
     MONTHLY = "monthly"
-    DAILY = "daily"
 
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)

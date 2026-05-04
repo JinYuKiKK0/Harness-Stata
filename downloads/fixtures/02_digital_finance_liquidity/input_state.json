@@ -72,7 +72,7 @@
             "variable_name": "LC",
             "source_fields": ["总表内流动性创造"],
             "match_kind": "semantic_equivalent",
-            "evidence": "字段「总表内流动性创造」即 Berger-Bouwman 方法计算的表内流动性创造,已按总资产标准化(VARCHAR 含脏值,需 TRY_CAST)。bank_id=代码(数字),与其他表 6 位 Bankcd 不一致需 LPAD 对齐"
+            "evidence": "字段「总表内流动性创造」即 Berger-Bouwman 方法计算的表内流动性创造,已按总资产标准化"
           },
           {
             "variable_name": "Size",
@@ -92,19 +92,19 @@
             "variable_name": "ROE",
             "source_fields": ["BANK_Index.ROE"],
             "match_kind": "direct_field",
-            "evidence": "字段名直接是 ROE 净资产收益率(VARCHAR,需 TRY_CAST)"
+            "evidence": "字段名即 ROE 净资产收益率"
           },
           {
             "variable_name": "NPL_ctrl",
             "source_fields": ["BANK_Loan.Nplra"],
             "match_kind": "semantic_equivalent",
-            "evidence": "Nplra = Non-Performing Loan ratio,即不良贷款率(VARCHAR,需 TRY_CAST)"
+            "evidence": "Nplra = Non-Performing Loan ratio,即不良贷款率"
           },
           {
             "variable_name": "CIR",
             "source_fields": ["BANK_MarketRisk.CostToIncomeRatio"],
             "match_kind": "direct_field",
-            "evidence": "字段名直接是 CostToIncomeRatio 成本收入比(VARCHAR,需 TRY_CAST)"
+            "evidence": "字段名即 CostToIncomeRatio 成本收入比"
           }
         ]
       },
@@ -118,7 +118,7 @@
             "variable_name": "DIFI",
             "source_fields": ["index_aggregate"],
             "match_kind": "derived",
-            "evidence": "DIFI = index_aggregate / 100。本表为省级粒度(prov_code),需通过 BANK_Info.ProvinceName 将银行 → 省份后再 JOIN"
+            "evidence": "DIFI = index_aggregate / 100"
           }
         ]
       },
@@ -132,7 +132,7 @@
             "variable_name": "ProvinceName",
             "source_fields": ["ProvinceName"],
             "match_kind": "direct_field",
-            "evidence": "字段直接是 ProvinceName 银行总部所在省份名称。本表为银行档案(无年份维度),需对每个银行按 (firm_id, year) 广播"
+            "evidence": "字段即 ProvinceName 银行总部所在省份名称"
           }
         ]
       }

@@ -56,7 +56,7 @@
 | sample_scope     | str                                             | 样本范围 e.g. "A股上市公司"  |
 | time_range_start | str                                             | 起始时间                     |
 | time_range_end   | str                                             | 结束时间                     |
-| data_frequency   | "yearly" \| "quarterly" \| "monthly" \| "daily" | 数据频率                     |
+| data_frequency   | "yearly" \| "monthly" | 数据频率                     |
 
 #### 共享类型
 
@@ -101,7 +101,7 @@
 | sample_scope         | str                                             | 样本范围 e.g. "A股上市公司"  |
 | time_range_start     | str                                             | 起始时间                     |
 | time_range_end       | str                                             | 结束时间                     |
-| data_frequency       | "yearly" \| "quarterly" \| "monthly" \| "daily" | 数据频率                     |
+| data_frequency       | "yearly" \| "monthly" | 数据频率                     |
 | analysis_granularity | str                                             | 分析粒度 e.g. "公司-年度"    |
 
 说明：不设 primary_keys / time_key 字段。概念粒度由 analysis_granularity 承载；实际数据库字段名在探针阶段下钻 schema 后才能确定，记录在 DownloadManifest 的 key_fields 中向下游传递。
