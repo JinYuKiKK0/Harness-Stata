@@ -44,6 +44,10 @@
 
 ## 通用 / 跨组件
 
+### [x] `python -m pkg.sub.module` 不会触发包的 `__main__.py` — [调试卡点]
+**现象/根因** — `clients/stata.py` 的 `args=["-m", "stata_executor.adapters.mcp"]` 让子进程立即 `exit 0`，MCP client 在 `session.initialize()` 阶段抛 `McpError: Connection closed`(被 anyio TaskGroup 包成 `ExceptionGroup`)。`-m` 指向**模块**(`adapters/mcp.py`)时,Python 直接执行该模块顶层而不会去找上层包的 `__main__.py`;而该 `mcp.py` 顶层只定义了 `main()` 函数、没有 `if __name__ == "__main__": main()` 守卫,顶层执行完就结束 → MCP server 从未真正运行。子进程秒退 ⇒ stdout 流秒关 ⇒ 父进程发出的 `initialize` 请求收到 `Connection closed`。
+**方案** — stdio 子进程的 `args` 必须指向**有 `__main__.py` 的包**(对照 `clients/csmar.py:42` 的 `-m csmar_mcp`)。已改为 `args=["-m", "stata_executor"]`,触发 `stata_executor/__main__.py:1-4` 的 `raise SystemExit(main())`。判定信号:`McpError: Connection closed` 出现在 `initialize()` 而非工具调用中 → 先把命令在终端裸跑,若**立即 exit 0**就是入口路径错。
+
 ### [x] DuckDB `read_csv(na_values=...)` 覆盖默认空串语义 — [依赖坑]
 **现象/根因** — 不传 `na_values` 时,DuckDB sniffer 把 unquoted 空 cell `,,` 视为 NULL,数值列正常推断为 `DOUBLE`。一旦传入 `na_values=[...]`,该列表会**覆盖**(而非追加)默认 NULL 集合,空字符串不再被当作 NULL,任何含空 cell 的列都会回落到 `VARCHAR`——比不传还糟。
 **方案** — `na_values` 列表必须始终包含 `""`。Harness-Stata 在 `src/harness_stata/nodes/data_cleaning.py::_NULL_TOKENS` 把 `""` 与 7 个 Excel 错误码(`#DIV/0!` 等)一起注入 `read_csv`,既消除脏值导致的 VARCHAR 退化,又保留默认空串语义。`tests/nodes/test_data_cleaning.py::test_register_sources_recovers_double_dtype_under_excel_pollution` 守住这条不变量。

@@ -31,16 +31,16 @@ async def get_stata_tools() -> AsyncGenerator[list[BaseTool]]:
         async with get_stata_tools() as tools:
             ...  # bind tools to a ReAct agent or node
 
-    On entry, spawns ``python -m stata_executor.adapters.mcp`` as a subprocess
-    with Stata executable / edition injected through the child process env.
-    On exit, the session and subprocess are closed automatically.
+    On entry, spawns ``python -m stata_executor`` as a subprocess with Stata
+    executable / edition injected through the child process env. On exit, the
+    session and subprocess are closed automatically.
     """
     s = get_settings()
     client = MultiServerMCPClient(
         {
             "stata": {
                 "command": sys.executable,
-                "args": ["-m", "stata_executor.adapters.mcp"],
+                "args": ["-m", "stata_executor"],
                 "transport": "stdio",
                 "env": {
                     "STATA_EXECUTOR_STATA_EXECUTABLE": s.stata_executable,

@@ -8,7 +8,13 @@
 
 <!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
-- 本次会话 — 按 `agent-node-prompting` skill 重构 `data_cleaning` 节点的 prompt 链路:
+- 本次会话 — 修复 `descriptive_stats` 节点首次启动 stata-executor MCP 子进程时 `McpError: Connection closed`:
+  - 根因:`clients/stata.py:43` 用 `args=["-m", "stata_executor.adapters.mcp"]`,而 `adapters/mcp.py` 顶层只定义 `main()` 函数、无 `if __name__ == "__main__":` 守卫,`adapters/` 也无 `__main__.py` → `python -m pkg.sub.module` 直接执行该模块顶层即结束 → 子进程 `exit 0`,MCP server 从未运行,父进程在 `session.initialize()` 收到 `Connection closed`(被 anyio TaskGroup 包成 `ExceptionGroup`)。
+  - 修复:`args` 改为 `["-m", "stata_executor"]`,触发 `stata_executor/__main__.py` 的 `raise SystemExit(main())`;与 `clients/csmar.py` 的 `["-m", "csmar_mcp"]` 形态对齐。
+  - 验证:`get_stata_tools()` 现在加载 doctor/run_do/run_inline 3 个工具;keep-alive stdin 实测下 broken entry 立即 `exit 0`,fixed entry 持续监听。
+  - `docs/pitfalls.md` 新增 `[调试卡点]` 条目,沉淀"`McpError: Connection closed` @ `initialize()` ⇒ 先裸跑 `args` 命令观察是否秒退"诊断套路。
+
+- 上次会话 — 按 `agent-node-prompting` skill 重构 `data_cleaning` 节点的 prompt 链路:
   - **system prompt 去双源契约**:删除整段「可用工具」(`run_sql` 的签名/返回规则在 tool docstring 已是真理之源);删除「终止与输出」中复述 `_CleaningOutput` 字段语义的部分,只留业务判据。
   - **`variable mapping contract` 上移**:从 HumanMessage(本轮可变区)搬到 system prompt(跨轮稳定区),提升 prompt cache 命中率。
   - **正向化禁令**:"不要从样本数值反推变换公式" → "依据 description 的业务语义";"不要凭空命名" → "必须取自 key_fields";"不要凭表名猜列名" → "依据 schema 与预览决策";删除冗余"不要重复执行等价查询"。
@@ -20,7 +26,7 @@
   - 测试 `test_data_cleaning_prompt_includes_variable_mappings` 重写为端到端构造 `_register_sources` 的形式,新增对 schema/preview/`<reminder>`/output_path 不被渲染的断言;8/8 测试通过。
   - 质量门禁:本次改动文件 ruff format/lint/pytest 全绿;pyright `int(df.iat[0,0])` 与其他文件 ruff format 失败均为存量问题,本次未引入新失败。
 
-- 上次会话 — 搭建 `src/harness_stata/observability/` 包(单向覆盖层,不侵入 nodes/graph/state/subgraphs):
+- 上上次会话 — 搭建 `src/harness_stata/observability/` 包(单向覆盖层,不侵入 nodes/graph/state/subgraphs):
   - `tracer.py` 双通道:**stream 通道** 用 `astream(stream_mode=["updates","values"], subgraphs=True)` 捕获节点 IO 与子图嵌套(namespace tuple → `nodes/<root>/sub_nodes/<child>/{input,update,output}.json`);**callback 通道** 继承 `BaseCallbackHandler` 在 `on_llm_*`/`on_tool_*` 写 `events.jsonl` 摘要 + `raw/<evt>.json` 完整体。
   - `store.py` `RunStore` 管 `.harness/runs/<run_id>/` 目录、JSONL 追加、`event_id` 单调、`.harness/latest` 文本指针(Windows symlink 不稳定故用文件)。
   - `loader.py` `FixtureLoader` 双源:`--from-run <id>`(unwrap NodeIOPayload)+ `--from-fixture <subdir>`(纯 WorkflowState dict);加 `validate_for_node` 校验关键字段。
@@ -34,8 +40,6 @@
   - import-linter layers 加入 `harness_stata.observability`(cli > observability > graph > nodes > subgraphs > clients);CLAUDE.md 架构树同步;`.gitignore` 加 `.harness/` + 豁免 `input_state.json`。
   - 三个 fixture 子目录(`01_capital_structure_roa`/`02_digital_finance_liquidity`/`03_fintech_bank_npl`)生成 `input_state.json`(整合 request.json + data_cleaning_input.json 的 user_request + empirical_spec + downloaded_files)。
   - 质量门禁:check.py 失败项(ruff format / pyright / 文件行数 / 架构漂移)均为上次会话已记录的存量问题,本次新增代码无任何引入失败。
-
-- 上上次会话 — 修复 data_cleaning 因 .txt 字段字典文件而 raise `unsupported source format '.txt'` 的链路缺陷(`_DATA_FILE_SUFFIXES` 白名单在 `data_download._extract_file_paths`)。
 
 ## 下一步
 
