@@ -37,25 +37,28 @@ async def planning_agent(state: ProbeState, cfg: ProbeNodeConfig) -> dict[str, A
         }
 
     db_block = state.get("available_databases", "")
-    var_lines = [
-        f"- name=`{v['name']}`, contract={v['contract_type']}, role={v['role']},"
-        f" description={v['description']}"
+    var_rows = [
+        f"| `{v['name']}` | {v['contract_type']} | {v['role']} | {v['description']} |"
         for v in queue
     ]
     human = HumanMessage(
         content=(
-            f"Variables awaiting candidate-table planning ({len(queue)} total):\n"
-            + "\n".join(var_lines)
-            + f"\n\nSample scope: {spec['sample_scope']}"
-            + f"\nTime range: {spec['time_range_start']} to {spec['time_range_end']}"
-            + f"\nData frequency: {spec['data_frequency']}"
-            + f"\n\nPurchased databases:\n{db_block}"
+            "<inputs>\n"
+            f"变量清单({len(queue)} 条):\n"
+            "| name | contract | role | description |\n"
+            "|---|---|---|---|\n" + "\n".join(var_rows) + f"\n\n已购数据库:\n{db_block}\n"
+            "</inputs>\n\n"
+            "<reminder>\n"
+            "已获得所有需要的表清单时,立即调用结构化输出工具一次性提交全部 plans。\n"
+            "variable_name 必须逐字等于 inputs 的 name;不确定的变量也要输出,"
+            'target_database="" 与 candidate_table_codes=[]。\n'
+            "</reminder>"
         )
     )
     agent = create_agent(
         model=get_chat_model(),
         tools=list(cfg.planning_tools),
-        system_prompt=cfg.planning_system_prompt,
+        system_prompt=cfg.planning_prompt,
         middleware=[
             ToolCallLimitMiddleware(
                 run_limit=cfg.planning_agent_max_calls,

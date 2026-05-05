@@ -32,12 +32,7 @@ from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from harness_stata.subgraphs.probe.config import (
-    ProbeNodeConfig,
-    compose_fallback_prompt,
-    compose_planning_prompt,
-    compose_verification_prompt,
-)
+from harness_stata.subgraphs.probe.config import ProbeNodeConfig
 from harness_stata.subgraphs.probe.nodes import (
     bulk_schema_phase,
     coverage_phase,
@@ -85,9 +80,9 @@ def build_probe_subgraph(
         fallback_tools=list(fallback_tools),
         bulk_schema_tool=bulk_schema_tool,
         probe_tool=probe_tool,
-        planning_system_prompt=compose_planning_prompt(planning_prompt),
-        verification_prompt=compose_verification_prompt(verification_prompt),
-        fallback_full_prompt=compose_fallback_prompt(fallback_prompt),
+        planning_prompt=planning_prompt,
+        verification_prompt=verification_prompt,
+        fallback_prompt=fallback_prompt,
         planning_agent_max_calls=planning_agent_max_calls,
         fallback_react_max_calls=fallback_react_max_calls,
     )

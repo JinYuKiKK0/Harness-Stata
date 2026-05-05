@@ -21,6 +21,7 @@ import re
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import duckdb
 import pandas as pd
@@ -254,7 +255,7 @@ def _format_query_result(df: pd.DataFrame) -> str:
     if len(cols) == 1 and cols[0] in _META_RESULT_COLUMNS:
         if total == 0:
             return "OK"
-        return f"OK (affected rows: {int(df.iat[0, 0])})"
+        return f"OK (affected rows: {int(cast(float, df.iat[0, 0]))})"
     if total == 0:
         return "(no rows)"
     preview = df.head(_PREVIEW_ROWS).to_string(index=False)

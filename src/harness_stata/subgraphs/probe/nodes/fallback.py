@@ -26,7 +26,6 @@ async def fallback_react_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[
     if not fallbacks:
         return {"pending_hard_fallbacks": []}
 
-    spec = state["empirical_spec"]
     db_block = state.get("available_databases", "")
     validation_queue = list(state.get("validation_queue") or [])
     report = ensure_report(state.get("probe_report"))
@@ -35,18 +34,22 @@ async def fallback_react_phase(state: ProbeState, cfg: ProbeNodeConfig) -> dict[
     for var in fallbacks:
         human = HumanMessage(
             content=(
-                f"Variable: {var['name']} - {var['description']} "
-                f"(contract: {var['contract_type']}, role: {var['role']})\n\n"
-                f"Sample scope: {spec['sample_scope']}\n"
-                f"Time range: {spec['time_range_start']} to {spec['time_range_end']}\n"
-                f"Data frequency: {spec['data_frequency']}\n\n"
-                f"Purchased databases:\n{db_block}"
+                "<inputs>\n"
+                f"变量: `{var['name']}` (contract={var['contract_type']}, role={var['role']})\n"
+                f"description: {var['description']}\n\n"
+                f"已购数据库:\n{db_block}\n"
+                "</inputs>\n\n"
+                "<reminder>\n"
+                "找到明确可得性结论或两轮工具调用后仍不确定时,立即调用结构化输出工具下结论。\n"
+                "found 时 database / table / field / source_fields / key_fields / match_kind 必填,"
+                "且必须逐字来自工具返回。\n"
+                "</reminder>"
             )
         )
         agent = create_agent(
             model=get_chat_model(),
             tools=list(cfg.fallback_tools),
-            system_prompt=cfg.fallback_full_prompt,
+            system_prompt=cfg.fallback_prompt,
             middleware=[
                 ToolCallLimitMiddleware(
                     run_limit=cfg.fallback_react_max_calls,
