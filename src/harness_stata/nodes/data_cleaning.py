@@ -18,6 +18,8 @@ import json
 import logging
 import os
 import re
+import textwrap
+from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
@@ -45,6 +47,8 @@ _MERGED_FILENAME = "merged.csv"
 _STAGE_DIRNAME = "_stage"
 _SRC_PREFIX = "src_"
 _PREVIEW_ROWS = 20
+# prompt 中预渲染的样本行数:让 LLM 不必再花一轮工具调用去 DESCRIBE / SELECT。
+_PROMPT_PREVIEW_ROWS = 3
 # 严格的 SQL 标识符白名单：ASCII 字母/数字/下划线，且不以数字开头。
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # DuckDB 对 DDL/DML/SET 会返回 0~1 行的 'Count' 或 'Success' 元信息列。
@@ -84,6 +88,14 @@ class _CleaningOutput(BaseModel):
     primary_key: list[str] = Field(description="Primary key column names of final_view.")
 
 
+@dataclass(frozen=True)
+class _ViewMeta:
+    """单个预注册视图的列结构与样本预览,供 prompt 内嵌渲染。"""
+
+    columns: list[tuple[str, str]]  # (column_name, dtype)
+    preview: str
+
+
 def _validate(state: WorkflowState) -> str | None:
     downloaded = state.get("downloaded_files")
     if downloaded is None or not downloaded.get("files"):
@@ -114,21 +126,25 @@ def _format_variables(variables: list[VariableDefinition]) -> str:
     )
 
 
-def _register_sources(conn: DuckDBPyConnection, files: list[DownloadedFile]) -> list[str]:
-    """把每个下载文件注册为 ``src_<source_table>`` 视图。
+def _register_sources(
+    conn: DuckDBPyConnection, files: list[DownloadedFile]
+) -> dict[str, _ViewMeta]:
+    """把每个下载文件注册为 ``src_<source_table>`` 视图,并探查列结构与样本。
 
     视图落在 ``main`` schema。``source_table`` 必须先通过 :data:`_IDENT_RE`
-    白名单校验，才能进入 SQL 标识符位置拼接。文件路径通过 DuckDB Python
-    relation API（``conn.read_csv``）传入，避免任何字符串级 SQL 拼接。
+    白名单校验,才能进入 SQL 标识符位置拼接。文件路径通过 DuckDB Python
+    relation API(``conn.read_csv``)传入,避免任何字符串级 SQL 拼接。
 
     通过 ``na_values=_NULL_TOKENS`` 把 Excel 错误字符串与空字符串统一视为
     NULL,让 DuckDB 类型推断把含脏值的数值列回归 ``DOUBLE``,避免下游 SQL
     反复 ``TRY_CAST``。详见 ``docs/pitfalls.md`` 关于 ``read_csv(na_values=)``
     覆盖默认空串语义的依赖坑。
 
-    返回按输入顺序排列的视图名列表。
+    返回 ``{view_name: _ViewMeta}`` 字典,key 顺序与 ``files`` 一致;
+    ``_ViewMeta`` 携带列结构与前 N 行预览,供 :func:`_build_human_prompt`
+    一次性内嵌到 system prompt,省去 LLM 自行探查的工具回合。
     """
-    view_names: list[str] = []
+    view_metas: dict[str, _ViewMeta] = {}
     for f in files:
         source_table = f["source_table"]
         if not _IDENT_RE.match(source_table):
@@ -153,8 +169,17 @@ def _register_sources(conn: DuckDBPyConnection, files: list[DownloadedFile]) -> 
             raise ValueError(msg)
         conn.execute(f'DROP VIEW IF EXISTS "{view_name}"')
         rel.create_view(view_name)
-        view_names.append(view_name)
-    return view_names
+        view_metas[view_name] = _inspect_view(conn, view_name)
+    return view_metas
+
+
+def _inspect_view(conn: DuckDBPyConnection, view_name: str) -> _ViewMeta:
+    """探查单个视图的列结构与前 N 行样本,供 prompt 渲染。"""
+    cols_rows = conn.execute(f'DESCRIBE "{view_name}"').fetchall()
+    columns = [(str(r[0]), str(r[1])) for r in cols_rows]
+    preview_df = conn.sql(f'SELECT * FROM "{view_name}" LIMIT {_PROMPT_PREVIEW_ROWS}').fetchdf()
+    preview = "(empty)" if preview_df.empty else preview_df.to_string(index=False)
+    return _ViewMeta(columns=columns, preview=preview)
 
 
 def _format_variable_mappings(raw: object) -> str:
@@ -166,43 +191,57 @@ def _format_variable_mappings(raw: object) -> str:
         return str(raw)
 
 
-def _format_source_block(idx: int, f: DownloadedFile) -> str:
+def _format_source_block(idx: int, f: DownloadedFile, meta: _ViewMeta) -> str:
     view_name = f"{_SRC_PREFIX}{f['source_table']}"
+    schema_lines = "\n".join(f"  - `{name}` ({dtype})" for name, dtype in meta.columns)
     mappings_txt = _format_variable_mappings(f.get("variable_mappings"))
+    preview_block = textwrap.indent(meta.preview, "    ")
+    mappings_block = textwrap.indent(mappings_txt, "    ")
     return (
-        f"{idx}. path={f['path']}\n"
-        f"   source_table={f['source_table']}  (registered view: {view_name})\n"
-        f"   key_fields={f['key_fields']}\n"
-        f"   variable_names={f['variable_names']}\n"
-        f"   variable_mappings:\n{mappings_txt}"
+        f"{idx}. view: `{view_name}` (source path: `{f['path']}`)\n"
+        f"   key_fields: {f['key_fields']}\n"
+        f"   variable_names: {f['variable_names']}\n"
+        f"   schema:\n{schema_lines}\n"
+        f"   preview (first {_PROMPT_PREVIEW_ROWS} rows):\n{preview_block}\n"
+        f"   variable_mappings:\n{mappings_block}"
     )
 
 
 def _build_human_prompt(
     spec: EmpiricalSpec,
     files: list[DownloadedFile],
-    output_path: Path,
+    view_metas: dict[str, _ViewMeta],
 ) -> str:
+    """渲染本轮 HumanMessage。
+
+    字段顺序按"决策依赖深度"——下游决策最先依赖的字段排前:
+    source views(含 schema + 预览)→ variables + analysis_granularity → sample/time。
+    末尾的 ``<reminder>`` 块在 ReAct 循环累积多轮 ToolMessage 后,把关键
+    终止条件复述到消息序列末端,抵消 recency bias。
+    """
+    sources_block = "\n\n".join(
+        _format_source_block(i, f, view_metas[f"{_SRC_PREFIX}{f['source_table']}"])
+        for i, f in enumerate(files, start=1)
+    )
     return (
-        f"## topic\n{spec['topic']}\n\n"
-        f"## analysis_granularity\n{spec['analysis_granularity']}\n\n"
-        f"## sample / time / frequency\n"
-        f"sample_scope: {spec['sample_scope']}\n"
-        f"time_range: {spec['time_range_start']} - {spec['time_range_end']}\n"
-        f"data_frequency: {spec['data_frequency']}\n\n"
+        "<inputs>\n\n"
+        f"## pre-registered source views\n{sources_block}\n\n"
         f"## variables (EmpiricalSpec.variables)\n"
         f"{_format_variables(spec['variables'])}\n\n"
-        f"## variable mapping contract\n"
-        "Use variable_mappings under each source view to decide which raw fields feed each"
-        " final variable. Final variable columns must align with EmpiricalSpec.variables[*].name"
-        " (snake_case form is acceptable for Stata-safe columns).\n\n"
-        f"## pre-registered source views\n"
-        + "\n\n".join(_format_source_block(i, f) for i, f in enumerate(files, start=1))
-        + "\n\n"
-        f"## output_path (node will export final_view here; do NOT COPY yourself)\n"
-        f"{output_path}\n\n"
-        "Build a single long-format view/table that merges the sources, then return"
-        " the final_view name and primary_key columns via the structured output schema."
+        f"## analysis_granularity\n`{spec['analysis_granularity']}`\n\n"
+        f"## topic\n{spec['topic']}\n\n"
+        f"## sample / time / frequency\n"
+        f"sample_scope: `{spec['sample_scope']}`\n"
+        f"time_range: `{spec['time_range_start']}` — `{spec['time_range_end']}`\n"
+        f"data_frequency: `{spec['data_frequency']}`\n\n"
+        "</inputs>\n\n"
+        "<reminder>\n"
+        "终止前必须通过两次自检:\n"
+        "1. `SELECT COUNT(*) FROM <final_view>` 行数符合 `analysis_granularity` 预期。\n"
+        "2. `SELECT <primary_key> FROM <final_view>"
+        " GROUP BY <primary_key> HAVING COUNT(*) > 1` 返回 0 行。\n"
+        "两项通过后,调用结构化输出工具上报 `final_view` 与 `primary_key` 终止。\n"
+        "</reminder>"
     )
 
 
@@ -386,13 +425,13 @@ async def data_cleaning(state: WorkflowState) -> MergedDataset:
 
     conn = duckdb.connect(":memory:")
     try:
-        _register_sources(conn, files)
+        view_metas = _register_sources(conn, files)
         sql_tool = _make_sql_tool(conn)
         payload, _ = await run_structured_agent(
             tools=[sql_tool],
             system_prompt=load_prompt("data_cleaning"),
             output_schema=_CleaningOutput,
-            human_message=_build_human_prompt(spec, files, output_path),
+            human_message=_build_human_prompt(spec, files, view_metas),
             max_iterations=_MAX_ITERATIONS,
             node_name="data_cleaning",
         )

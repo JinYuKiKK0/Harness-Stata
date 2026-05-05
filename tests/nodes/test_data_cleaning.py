@@ -149,10 +149,12 @@ def test_register_sources_recovers_double_dtype_under_excel_pollution(tmp_path: 
     )
 
 
-def test_data_cleaning_prompt_includes_variable_mappings(
+def test_data_cleaning_prompt_includes_variable_mappings_and_schema_preview(
     tmp_path: Path,
     make_empirical_spec: Callable[..., EmpiricalSpec],
 ) -> None:
+    """HumanMessage 必须包含 variable_mappings、视图 schema 与样本预览,
+    且末尾有 ``<reminder>`` 块复述终止条件,output_path 不应被渲染。"""
     _, task_dir = _make_session_layout(tmp_path)
     src = _write_panel_csv(task_dir, "data.csv")
     file_ = _make_downloaded_file(src)
@@ -165,9 +167,23 @@ def test_data_cleaning_prompt_includes_variable_mappings(
         }
     ]
 
-    prompt = _build_human_prompt(make_empirical_spec(), [file_], tmp_path / "merged.csv")
+    conn = duckdb.connect(":memory:")
+    try:
+        view_metas = _register_sources(conn, [file_])
+        prompt = _build_human_prompt(make_empirical_spec(), [file_], view_metas)
+    finally:
+        conn.close()
 
     assert "variable_mappings" in prompt
     assert '"variable_name": "ROA"' in prompt
     assert '"source_fields": [' in prompt
-    assert "variable mapping contract" in prompt
+    # schema + preview 必须内嵌,省去 LLM 探查
+    assert "schema:" in prompt
+    assert "`stkcd`" in prompt
+    assert "preview (first 3 rows):" in prompt
+    # 终止条件 reminder 块
+    assert "<reminder>" in prompt
+    assert "GROUP BY" in prompt
+    # output_path 不应被渲染(避免诱导 LLM 自行 COPY)
+    assert "output_path" not in prompt
+    assert "merged.csv" not in prompt
