@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from langchain_core.messages import BaseMessage
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import BaseTool, ToolException, tool
 from pydantic import BaseModel
 
 from harness_stata.clients.stata import get_stata_tools
@@ -56,11 +56,41 @@ def _find_tool(tools: list[BaseTool], name: str) -> BaseTool:
     raise RuntimeError(msg)
 
 
+def _unwrap_mcp_payload(raw: Any) -> Any:
+    """langchain-mcp-adapters 0.2.x 把 CallToolResult.content 转成 LC 内容块列表
+    ``[{"type":"text","text":"<json>","id":...}, ...]``;``structuredContent`` 走
+    artifact 通道,不通过默认 ``ainvoke`` 返回。本 helper 把这些形态归一为原生 Python:
+    dict 原样返回 / str 尝试 JSON 反序列化 / list 抽 text 块拼接后 JSON 反序列化。
+    """
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+    if isinstance(raw, list):
+        texts = [
+            item["text"]
+            for item in raw
+            if isinstance(item, dict)
+            and item.get("type") == "text"
+            and isinstance(item.get("text"), str)
+        ]
+        if texts:
+            joined = "".join(texts)
+            try:
+                return json.loads(joined)
+            except json.JSONDecodeError:
+                return joined
+    return raw
+
+
 async def _doctor_precondition(tools: list[BaseTool]) -> None:
     """前置自检：``ready=False`` 直接 raise,把诊断信息抛给上层。"""
     doctor_tool = _find_tool(tools, "doctor")
     raw = await doctor_tool.ainvoke({})
-    payload: object = json.loads(raw) if isinstance(raw, str) else raw
+    payload = _unwrap_mcp_payload(raw)
     if not isinstance(payload, dict):
         msg = f"doctor: unexpected payload type {type(payload).__name__}"
         raise RuntimeError(msg)
@@ -102,22 +132,27 @@ def _make_run_inline_wrapped(
         - ``error_kind`` 为 ``bootstrap_error`` 或 ``env_error`` → 基础设施层故障,
           **不要尝试修复 do 代码**,立即调用结构化输出工具上报现场。
         """
-        raw = await orig.ainvoke(
-            {
-                "commands": commands,
-                "working_dir": working_dir_str,
-                "artifact_globs": artifact_globs,
-                "timeout_sec": _TIMEOUT_SEC,
-            }
-        )
-        text = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
         try:
-            parsed: object = json.loads(text)
-        except json.JSONDecodeError:
-            parsed = {"status": "failed", "error_kind": None, "artifacts": [], "raw": text}
+            raw: Any = await orig.ainvoke(
+                {
+                    "commands": commands,
+                    "working_dir": working_dir_str,
+                    "artifact_globs": artifact_globs,
+                    "timeout_sec": _TIMEOUT_SEC,
+                }
+            )
+        except ToolException as exc:
+            # langchain-mcp-adapters 在 CallToolResult.isError=True 时直接 raise
+            # ToolException(error_msg);stata-executor 失败时 error_msg 即完整
+            # ExecutionResult JSON 字符串。把它还原成 raw,让 LLM 看到失败结果并修 do。
+            raw = str(exc)
+        parsed = _unwrap_mcp_payload(raw)
         if isinstance(parsed, dict):
             history.append({"commands": commands, "execution_result": parsed})
-        return text
+            return json.dumps(parsed, ensure_ascii=False)
+        if isinstance(parsed, str):
+            return parsed
+        return json.dumps(parsed, ensure_ascii=False)
 
     return run_inline
 
@@ -131,30 +166,38 @@ def _last_succeeded_entry(history: list[dict[str, Any]]) -> dict[str, Any] | Non
 
 
 def _extract_artifacts(history: list[dict[str, Any]]) -> tuple[str, str]:
-    """从 history 末尾取最后一次 succeeded ExecutionResult 的 input.do 与 run.log 绝对路径。"""
+    """从 history 末尾取最后一次 succeeded ExecutionResult 的 input.do 与 run.log 绝对路径。
+
+    stata-executor 的 ``collect_artifacts`` 做差分采集且 ``snapshot_artifacts`` 在
+    ``stage_inline_input`` (写 input.do) 之后才执行,导致 input.do 被判为未变更而不
+    出现在 ExecutionResult.artifacts。这里以 run.log 为锚点,从其父 job 目录直接
+    拼出 input.do(两文件由 stata-executor 保证同目录共存)。
+    """
     entry = _last_succeeded_entry(history)
     if entry is None:
         msg = "_stata_agent: no succeeded ExecutionResult in history"
         raise RuntimeError(msg)
     result = cast(dict[str, Any], entry["execution_result"])
     artifacts_raw = result.get("artifacts") or []
-    do_path: str | None = None
     log_path: str | None = None
     for a in artifacts_raw:
-        if not isinstance(a, str):
-            continue
-        name = Path(a).name
-        if name == "input.do" and do_path is None:
-            do_path = a
-        elif name == "run.log" and log_path is None:
+        if isinstance(a, str) and Path(a).name == "run.log":
             log_path = a
-    if do_path and log_path:
-        return do_path, log_path
-    msg = (
-        f"_stata_agent: succeeded ExecutionResult missing artifacts"
-        f" (input.do={do_path!r}, run.log={log_path!r}); 检查 artifact_globs 配置"
-    )
-    raise RuntimeError(msg)
+            break
+    if log_path is None:
+        msg = (
+            f"_stata_agent: succeeded ExecutionResult missing run.log artifact"
+            f" (artifacts={artifacts_raw!r}); 检查 artifact_globs 配置"
+        )
+        raise RuntimeError(msg)
+    do_candidate = Path(log_path).parent / "input.do"
+    if not do_candidate.is_file():
+        msg = (
+            f"_stata_agent: input.do not found beside run.log"
+            f" (expected at {do_candidate!s}); 检查 stata-executor job 目录布局"
+        )
+        raise RuntimeError(msg)
+    return str(do_candidate), log_path
 
 
 def _dump_failure(

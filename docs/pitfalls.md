@@ -28,6 +28,26 @@
 
 **方案** — 节点侧统一走 `src/harness_stata/clients/mcp.py` 的 `call_structured_mcp_tool()`:用 ToolCall 协议调用,优先取 `artifact.structured_content`,否则 JSON 解码 content 文本。Agent 侧若需要 structuredContent 可见,需引入 mcp-interceptor 把结构化内容拼接进 content;但 `MultiServerMCPClient(tool_interceptors=[...])` 只在 `client.get_tools()` 路径生效,当前 `client.session(...) + load_mcp_tools(session)` 裸调用路径**不会**传递 interceptor(`load_mcp_tools` 自身有 `tool_interceptors` 参数但未传)— Agent 侧拦截器尚未启用。
 
+### [x] `langchain-mcp-adapters` 0.2.x `ainvoke` 返回 `list[ContentBlock]` — [依赖坑]
+**现象/根因** — `BaseTool.ainvoke({...})` 在裸 ToolNode 之外的调用路径下返回**内容块列表** `[{"type":"text","text":"<json>","id":"lc_..."}, ...]`,而不是字符串。`_convert_call_tool_result` (`langchain_mcp_adapters/tools.py`) 把 `CallToolResult.content` 转成 LC content blocks,`structuredContent` 单独走 artifact 通道,默认 `ainvoke` 不返回 artifact。早期代码 `payload = json.loads(raw) if isinstance(raw, str) else raw` 在 list 形态下既不进 JSON 分支也不是 dict,直接抛 `unexpected payload type list`,**descriptive_stats / regression 节点的 `_doctor_precondition` 与 `_make_run_inline_wrapped` 都中招**。
+**方案** — `src/harness_stata/nodes/_stata_agent.py::_unwrap_mcp_payload` helper 归一处理 dict / str / list 三态:list 形态抽 `type=text` 的 text 块拼接后 JSON 解码。覆盖测试见 `tests/nodes/test_stata_agent.py`。
+
+### [x] `langchain-mcp-adapters` 把 `CallToolResult.isError=True` raise 成 `ToolException` — [依赖坑]
+**现象/根因** — 同上 0.2.x 适配器的 `_convert_call_tool_result` 在 `call_tool_result.isError=True` 时**直接 raise `ToolException(error_msg)`**(`tools.py:189`),而不是把失败结果作为正常返回值递给上层。stata-executor 的 `_build_result` 在 `execution.status == "failed"` 时设 `is_error=True`,导致 Stata 失败结果被包成异常一路上抛、ToolNode 没处理就崩。后果:ReAct 子图的"看错误修代码"自愈循环**永不发生**,LLM 看不到失败 ExecutionResult,节点直接 raise。
+**方案** — `_make_run_inline_wrapped` 的 `run_inline` 闭包 `try ... except ToolException as exc: raw = str(exc)`。adapter 拼出的 `error_msg` 即完整 ExecutionResult JSON 字符串(stata-executor 把 dict.dump 后塞进 TextContent.text),还原为 raw → `_unwrap_mcp_payload` → history append → 返回给 LLM。
+
+### [x] stata-executor `collect_artifacts` 漏报 `input.do` — [依赖坑]
+**现象/根因** — `stata_executor/engine/executor.py::_execute_prepared_job` 的调用顺序是 `stage_inline_input(写 input.do)` → `write_wrapper_do` → `snapshot_artifacts` → 执行 → `collect_artifacts(差分)`。snapshot 在 input.do 已写入之后取,执行过程不再修改 input.do,差分逻辑 `before_snapshot.get(resolved) != marker` 把它判定为"未变更",**最终 ExecutionResult.artifacts 只列 run.log,不含 input.do**。`_extract_artifacts` 期待两文件并存,raise `succeeded ExecutionResult missing artifacts`。
+**方案** — 不修 stata-executor 自身(它的 `result.json` 持久化里也只列 run.log,但 input.do 实际就在 `<jobs>/job_<ts>_<hash>/input.do`)。在 `_extract_artifacts` 以 run.log 为锚点,从其父目录直接拼 `input.do` 路径并 `is_file()` 校验存在,绕开差分逻辑。两文件由 stata-executor job 目录布局保证共存,推导稳健。
+
+---
+
+## Stata
+
+### [x] `import delimited` 默认 `case(lower)` 强制把变量名小写化 — [依赖坑]
+**现象/根因** — Stata 17 `import delimited "...", clear` 默认 `case(lower)`,把 csv 表头(无论原始大小写)一律转小写后落到 Stata 变量名。即便 csv 表头是 `ROA,Leverage,...`,加载后 `describe` 显示的变量名也是 `roa,leverage,...`。LLM 看到 EmpiricalSpec 是 PascalCase 自然写 `summarize ROA Leverage` → `variable ROA not found r(111)`,白白浪费一轮 ReAct 自愈。
+**方案** — 跨节点契约 + 显式 case 选项双重保障:(1) `prompts/data_cleaning.md` 强制最终 csv 列名与 `EmpiricalSpec.variables[*].name` 字节级一致(含大小写),不做 snake_case / lower 等任何变换;(2) `prompts/descriptive_stats.md` 与 `prompts/regression.md` 显式要求 `import delimited "...", case(preserve) clear`,跳过 Stata 的 case(lower) 默认行为;(3) 删除"csv 首行若有大小写差异先 rename 对齐"防御层,`EmpiricalSpec.variables` 即真理之源,直接用。
+
 ---
 
 ## LangGraph / 状态机

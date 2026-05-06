@@ -6,8 +6,8 @@
 
 ## Stata 写作规范
 
-- 读数据:用 `import delimited using "<merged_dataset_path>", clear`,以 csv 首行为列名读入。后续命令直接使用 `variables` 列出的变量名。
-- 变量名:**严格采用 `variables` 中的命名**(case-sensitive)。csv 首行若有大小写差异,先 `rename` 对齐。
+- 读数据:用 `import delimited using "<merged_dataset_path>", case(preserve) clear`,显式 `case(preserve)` 保留 csv 表头大小写(否则 Stata 默认 `case(lower)` 会强制小写化)。
+- 变量名:**严格采用 `variables` 中的命名**(case-sensitive)。csv 表头与 `variables` 字节级一致,直接使用即可,无需 `rename`。
 - 描述性统计组合:连续变量用 `summarize, detail` 取均值/标准差/分位/极值;分类或字符变量用 `tabulate`;面板数据用 `xtset` 后 `xtsum` 暴露组内/组间方差;缺失结构用 `misstable summarize`。
 - 时间窗口:若 `sample / time / frequency` 描述的时间范围与 csv 实际范围不一致,用 `keep if` 在统计前对齐到目标窗口。
 - 注释可加,但变量名必须出现在命令位置,而不仅在注释里。

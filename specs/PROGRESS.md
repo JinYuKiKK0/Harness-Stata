@@ -2,13 +2,47 @@
 
 ## 当前焦点
 
-实现 `descriptive_stats` (F21) 与 `regression` (F22) 两个 Stata ReAct 节点;以 `data_cleaning` 节点为蓝本,共享 `_stata_agent.py` 公共 helper。
+`descriptive_stats` (F21) / `regression` (F22) 端到端 smoke 在 3 个 fixture 上全部通过,0 次 ReAct 自愈 1 次 run_inline 即终止。
 
 ## 当前上下文
 
 <!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
-- 本次会话 — 重写 `descriptive_stats` (F21) 与 `regression` (F22) 两个节点(此前为 `NotImplementedError` 空壳):
+- 本次会话 — 修复 langchain-mcp-adapters 0.2.x 三处适配缺口 + Stata `case(preserve)` 契约硬化,3 fixture × 2 节点共 6 个端到端跑全部 0 次 ReAct 自愈通过:
+  - **MCP 适配修复**(`src/harness_stata/nodes/_stata_agent.py`):
+    1. 新增 `_unwrap_mcp_payload` helper 把 adapter 0.2.x 的 `list[ContentBlock]` 形态(`[{"type":"text","text":"<json>","id":...}, ...]`)归一为原生 dict;`_doctor_precondition` 与 `_make_run_inline_wrapped` 共用。
+    2. `run_inline` 闭包 `try ... except ToolException as exc: raw = str(exc)` —— adapter 在 `CallToolResult.isError=True` 时直接 raise,error_msg 即完整 ExecutionResult JSON;捕获后回流给 LLM 走 ReAct 自愈路径。
+    3. `_extract_artifacts` 改为以 run.log 为锚点从父目录推 input.do —— stata-executor `collect_artifacts` 在 `stage_inline_input` 之后取 snapshot,差分把 input.do 误判为"未变更"漏报,绕开。
+  - **Stata 列名契约硬化**(prompt 改 4 行,fixture/代码/equation 全不动):
+    1. `prompts/data_cleaning.md:16` "snake_case 等价"→ **字节级一致**;主键照搬 `key_fields` 源字段名。
+    2. `prompts/descriptive_stats.md:9` 与 `regression.md:9` 显式 `import delimited "...", case(preserve) clear`(治根:Stata 17 默认 `case(lower)` 把大写表头小写化)。
+    3. 两 prompt 第 10 行删除"csv 首行若有大小写差异先 rename 对齐"防御层(`feedback_no_defense_layering`:契约硬化后防御层即诱因)。
+  - **决策依据**:`requirement_analysis` 节点 EmpiricalSpec 命名是 PascalCase + 大写缩写(论文学术风格),`model_construction.md` 的 LaTeX equation 范本同样 PascalCase。.harness 历史 trace 显示真实 data_cleaning 输出列名一直是字节级吻合(`Bankcd / NPL / LLR / Size / ROA / CAR / GDPg / ProvinceName`),把"已成立的事实"硬化为契约,比让 LLM 改用 snake_case + 改 LaTeX 学术风格代价小得多。
+  - **新增纯代码测试**(`tests/nodes/test_stata_agent.py`,13 测全 PASS):`_unwrap_mcp_payload` 五态(dict/str-JSON/str-非JSON/list-text块/list-空/list-无text)+ `_extract_artifacts` 五态(同 job 共存/缺 run.log/缺 input.do/无 succeeded/多 succeeded 取末)。
+  - **6 个 fixture × 节点端到端跑 trace 矩阵**(全 success / 0 errors / 1 次 run_inline / 4 行 timeline):
+    - 01 capital_structure_roa: desc → `desc_stats_report.summary` 含 8 变量 xtsum 方差分解;regr → Leverage 系数 -0.0211,sign_check.consistent=True
+    - 02 digital_finance_liquidity: desc → 2,220 obs / 231 银行;regr → DIFI 系数为正,sign_check.consistent=True
+    - 03 fintech_bank_npl: desc → 4,052 obs / 484 银行 / 30 省份;regr → DIF 系数为负,sign_check.consistent=True
+  - **`docs/pitfalls.md` 新增 4 条 `[依赖坑]`**:adapter 0.2.x 返回 list / `isError=True` raise ToolException / stata-executor 漏报 input.do / Stata `import delimited` 默认 case(lower)。
+  - **质量门禁**:pytest(13 新增 + 全量回归)/ ruff lint / ruff format / pyright / import-linter 全 PASS;custom lint 仅存量 ERROR(`probe/pure.py 627 行`)+ 36 WARN,本次未引入新失败(`_stata_agent.py` 新增 ~40 行后越过 300 行阈值多出 1 条文件大小 WARN,可接受)。
+
+- 上次会话 — 为 `descriptive_stats` 与 `regression` 铺设隔离单跑前置资源:
+  - **决策**(用户 3 项采访锁定):单一 `input_state.json` 累加 `merged_dataset`+`model_plan` 切片 / `model_plan` 手工编写但严格模拟 model_construction 节点真实输出风格 / 本次只铺 fixture + 注册 registry,真 Stata+LLM 端到端 smoke 由用户在另起环境手动跑。
+  - **运行时视野修正**(用户提醒后第二轮重写,首版被推翻):
+    - **拓扑事实**:`requirement_analysis → model_construction → data_probe → ... → data_cleaning → descriptive_stats → regression`,**model_construction 在 data_cleaning 之前**——它产出 `model_plan` 时只看 `EmpiricalSpec`,看不到 csv 列名/大小写。首版 fixture 把 `i.bankcd`/`i.Bankcd`(csv 真实列大小写)写进 equation 是双重失真:既违背"运行时视野"边界,又违背 model_construction prompt 的 LaTeX 强制契约。
+    - **重写遵循 prompts/model_construction.md 契约**:`model_type` 取 5 个中文标签(此处全为 `双向固定效应面板模型`);`equation` 用 LaTeX 源码 + `$$...$$` 包裹 + `\alpha / \beta_1 / \gamma_k Controls_{k,i,t} / \mu_i / \delta_t / \varepsilon_{i,t}`,**禁止 Unicode 字形**且控制变量统一为向量形式不逐一展开;`rationale` 30-80 字中文文献风;`data_structure_requirements` 3-5 条自然语言中文(数据组织形态/时间跨度/样本规模/平衡性)。
+    - **副作用**:LaTeX `Leverage_{i,t}` 让 `test_equation_references_core_variable` 的 `(?![A-Za-z0-9_])` 边界否决,改为 `(?![A-Za-z0-9])`(允许 `_` 跟在变量名后)——同时仍排除 `DIF` 误命中 `DIFI`(后跟字母 I 仍被否决)。
+    - `expected_sign` 不兜底 `ambiguous`——三 fixture 各按文献先验填具体符号(01=`-` 资本结构、02=`+` 数字金融对流动性创造、03=`-` 金融科技对 NPL),让 regression 节点 LLM 填 `sign_check.consistent` 时可观测。
+    - 03 双 dependent (NPL/LLR) 处理:user_request.y_variable=NPL → equation 选 NPL 作被解释变量;LLR 仅在 descriptive_stats 阶段被覆盖,COV/USE/DIG 不进 baseline 避免分指数共线。
+  - **文件变动**:
+    - 三 fixture 的 `input_state.json` 各追加 `merged_dataset`(file_path 绝对路径 + columns 与 `merged.csv` 首行字节级一致 + row_count 与 csv 数据行数一致 + warnings=[])和 `model_plan` 切片。
+    - `observability/registry.py` 注册 `descriptive_stats` (`@awrites_to` 装饰加 `# type: ignore[dict-item]`) 与 `regression` (返回 `RegressionOutput` TypedDict 也加 ignore);REQUIRED_FIELDS 加 `("empirical_spec","merged_dataset")` 与 `("empirical_spec","merged_dataset","model_plan")` 两行。
+    - 新增 `tests/observability/test_registry.py`(4 测):NODE_REGISTRY 含两节点 + 字段元组字面量 + 两表 key 完全一致;**不**做 `_validate` 反射对齐(粒度不同)。
+    - 新增 `tests/observability/test_fixtures.py`(6 参数化 × 3 fixture = 18 测):input_state 含 4 关键 key、merged.csv 是 fixture 同目录绝对路径文件、columns 与 csv 首行一致、row_count 与 csv 数据行数一致、core_hypothesis.variable_name ∈ independent 名册、expected_sign ∈ {+,-,ambiguous}、equation 含 core 变量名(单词边界,与 `_check_core_var_present` 同款 lookaround)。
+  - **质量门禁**:pytest / ruff lint / ruff format / pyright / import-linter 全 PASS;custom lint 仅存量 ERROR(`probe/pure.py 627 行`)+ 35 WARN(`CLAUDE.md` 架构树未维护具体文件、几个文件超 300 行),本次未引入新失败。
+  - **未做端到端 smoke**:对应 PROGRESS"下一步" (c) 后半段,需真 Stata + LLM API key 环境跑 `harness-stata node-run descriptive_stats --from-fixture 01_capital_structure_roa` 与 `... regression --from-fixture 01_capital_structure_roa`,核对 `.harness/runs/<run_id>/nodes/<node>/{input,update,output,events}.{json,jsonl}` 字段完整性。
+
+- 上次会话 — 重写 `descriptive_stats` (F21) 与 `regression` (F22) 两个节点(此前为 `NotImplementedError` 空壳):
   - **架构决策**(经 4 轮采访 + Plan agent 跨视角 review 锁定):
     - LLM 工具集**仅 1 个**——`run_inline`(节点层用 `@tool` 闭包包装预填 `working_dir / artifact_globs / timeout_sec`);`doctor` 改为节点入口 precondition,不进 LLM 工具集;不暴露 `run_do`、不引入 `FileManagementToolkit`。理由:`run_inline` 内部就是 stata-executor 的 "写 input.do + 跑 Stata" 封装,LLM 直接交付字符串等价于 `write_file + run_do` 但少一类 IO 失败模式;FileManagementToolkit 的 `write_file` 也是全文 overwrite,patch 优势不存在。
     - **agent 严格定位**:do 代码作者 + Stata 报错修复者,不做实证决策(不修数据/不改方程/不扫稳健性)。
@@ -70,7 +104,7 @@
 - **MVP 本地 CLI 已完成**,**面向 Claude 的可观测性基础设施已落地**。所有 25+F26 个 feature passes=true,ReAct 子图已迁移到 `create_agent`,`.harness/runs/` 持久化 trace 接管 LangSmith 在调试场景下的角色。下一阶段方向由用户决定:
   - (a) **基础设施端到端验证**:启动 CSMAR-Data-MCP / Stata-Executor-MCP 服务,配 DashScope API key,实际跑 `harness-stata node-run data_cleaning --from-fixture 01_capital_structure_roa` 与 `harness-stata node-run data_probe --from-fixture 01_capital_structure_roa`,验证 trace 字段、子图嵌套、LLM/tool 事件归属是否符合预期。
   - (b) 真实端到端全流程:跑 `harness-stata run` 真实 UserRequest 验证 LLM + MCP 链路 + 完整 trace 覆盖 8 节点。
-  - (c) `descriptive_stats` 与 `regression` 节点已落地(本次会话),纯代码测试已通过;待跑真 Stata + LLM 端到端 smoke,跑通后将两节点加入 `observability/registry.NODE_REGISTRY` 支持单跑。
+  - (c) `descriptive_stats` 与 `regression` 节点已通过 3 fixture × 2 节点端到端 smoke,0 次 ReAct 自愈 1 次 run_inline 即终止,trace 字段完整,sign_check 与文献先验一致。
   - (d) 技术债清理:stata-executor ruff+pyright 收口 / tests/ 纳入 ruff format 门禁 / data_cleaning.py:202 Scalar/complex pyright 存量。
   - (e) Web 迭代启动:把 CLI 换成 HTTP/WS 适配层,checkpointer 升级为 SqliteSaver 以跨进程 resume。
   - (f) 功能扩展:稳健性回归 / 异质性分析 / 可视化等非 MVP feature。

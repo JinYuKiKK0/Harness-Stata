@@ -13,7 +13,7 @@
 
 - 仅使用 `source_fields` 列出的原料字段构造目标变量。
 - **变换公式的依据是 `description` 的业务语义**(pass-through、ratio、log、firm_age 等),而非样本数值的统计观察。
-- 最终列名必须与 `EmpiricalSpec.variables[*].name` 对齐,允许其严格 snake_case 等价形式(仅大小写/下划线差异)。
+- 最终列名必须与 `EmpiricalSpec.variables[*].name` **字节级一致**(含大小写,不做 snake_case / lower 等任何变换);主键列名照搬 `key_fields` 中的源字段名。
 
 ## 决策规则
 

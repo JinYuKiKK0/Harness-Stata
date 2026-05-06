@@ -6,8 +6,8 @@
 
 ## Stata 写作规范
 
-- 读数据:用 `import delimited using "<merged_dataset_path>", clear`,以 csv 首行为列名读入。
-- 变量名:**严格采用 `variables` 中的命名**(case-sensitive)。csv 首行若有大小写差异,先 `rename` 对齐。
+- 读数据:用 `import delimited using "<merged_dataset_path>", case(preserve) clear`,显式 `case(preserve)` 保留 csv 表头大小写(否则 Stata 默认 `case(lower)` 会强制小写化)。
+- 变量名:**严格采用 `variables` 中的命名**(case-sensitive)。csv 表头与 `variables` 字节级一致,直接使用即可,无需 `rename`。
 - 方程对齐:do 代码中的回归命令必须严格反映 `equation`——
   - `equation` 含 `mu_i` / `lambda_t` 等固定效应项 → 用 `xtset` + `xtreg ..., fe` 或 `reghdfe ..., absorb(...)` 吸收;
   - `equation` 含交互项(`X*Z` 或 `X#Z`)→ 用 Stata 因子变量记号 `c.X##c.Z` 等价表达;
