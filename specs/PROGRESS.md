@@ -2,13 +2,36 @@
 
 ## 当前焦点
 
-搭建面向 Claude Code 的节点单跑 + JSONL trace 持久化基础设施(`.harness/runs/`),替代 LangSmith Studio 在 Agent 调试场景下的不可见性,让 Claude 能直接 `Read`/`Grep` trace 自循环纠错。本期范围:`data_probe` 与 `data_cleaning` 单跑;全流程 trace 覆盖所有节点。
+实现 `descriptive_stats` (F21) 与 `regression` (F22) 两个 Stata ReAct 节点;以 `data_cleaning` 节点为蓝本,共享 `_stata_agent.py` 公共 helper。
 
 ## 当前上下文
 
 <!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
-- 本次会话 — 修复 `descriptive_stats` 节点首次启动 stata-executor MCP 子进程时 `McpError: Connection closed`:
+- 本次会话 — 重写 `descriptive_stats` (F21) 与 `regression` (F22) 两个节点(此前为 `NotImplementedError` 空壳):
+  - **架构决策**(经 4 轮采访 + Plan agent 跨视角 review 锁定):
+    - LLM 工具集**仅 1 个**——`run_inline`(节点层用 `@tool` 闭包包装预填 `working_dir / artifact_globs / timeout_sec`);`doctor` 改为节点入口 precondition,不进 LLM 工具集;不暴露 `run_do`、不引入 `FileManagementToolkit`。理由:`run_inline` 内部就是 stata-executor 的 "写 input.do + 跑 Stata" 封装,LLM 直接交付字符串等价于 `write_file + run_do` 但少一类 IO 失败模式;FileManagementToolkit 的 `write_file` 也是全文 overwrite,patch 优势不存在。
+    - **agent 严格定位**:do 代码作者 + Stata 报错修复者,不做实证决策(不修数据/不改方程/不扫稳健性)。
+    - **成功判定分工**:agent 看 `exit_code/result_text` 软判;变量覆盖率 / 核心解释变量命中由节点层 deterministic 校验(post-check),失败 raise 不重启 agent。
+    - **失败兜底**:超轮 / 缺结构化输出 / 缺成功执行 / `bootstrap_error` / post-check 失败 / 缺 artifacts 六类失败统一 dump 到 `<workspace>/_failure/dump.txt` 后 raise。
+  - **关键实现细节**(Plan agent review 修正了原方案 5 处):
+    - `do_file_path / log_file_path` 都从 `ExecutionResult.artifacts` 取(因 `artifact_globs=(".stata-executor/jobs/*/run.log", ".stata-executor/jobs/*/input.do")` 已含两者);**不在节点层另写一份 do**——消除游离副本与重复 IO,与 stata-executor 内部 `input.do` 字节级一致。
+    - 工具用 `@tool` 闭包 + 节点局部 `history: list[dict]`,每次 `ainvoke` 后 append `ExecutionResult` dict,绕开"从 ToolMessage 文本反 parse JSON"的脆弱链路。
+    - **超轮 dump 必须自装 `create_agent`**(不复用 `_agent_runner.run_structured_agent`),才能 catch `ModelCallLimitExceededError` 并把 messages 落到 dump;`_agent_runner` 保持原状继续供 `data_cleaning` 使用。
+    - post-check 字符串匹配先 `_strip_stata_noncode`(块/行尾/整行星号注释 + 双引号字面量),再用 `(?<![A-Za-z0-9_])varname(?![A-Za-z0-9_])` 大小写敏感匹配,防注释/字符串误命中;子串(`ROAB` vs `ROA`)、大小写差(`roa` vs `ROA`)由 lookaround + case-sensitive 否决。
+    - artifact glob 单星(`jobs/*/run.log`)对应 stata-executor 单层 jobs 目录,不要写 `**`。
+    - run_id 公式 `f"{int(time.time())}_{uuid.uuid4().hex[:8]}"` 与 stata-executor `runtime/__init__.py:89` 同款。
+  - **文件变动**:
+    - 新增 `src/harness_stata/nodes/_stata_agent.py`(310 行):`run_stata_agent` helper,按 `node_name + system_prompt + human_message + output_schema + iter_cap + post_check_fn` 装配一轮 ReAct 完整生命周期。
+    - 重写 `nodes/descriptive_stats.py`(`@awrites_to("desc_stats_report")`,iter_cap=6) 与 `nodes/regression.py`(显式 `RegressionOutput` 双 slice,iter_cap=10)。
+    - 重写 `prompts/descriptive_stats.md` 与 `prompts/regression.md`(纯静态 system prompt,严格按 `agent-node-prompting` skill checklist 通过:无双源契约、无工作流时序、无代码符号、决策判据非禁令)。
+    - `config.py` 新增 `Settings.workspaces_root`(读 `HARNESS_WORKSPACES_ROOT`,默认 `<root>/workspaces`);严格遵守 `dotenv_values`-only 注入(无系统 env fallback)。
+    - 新增 `tests/nodes/test_descriptive_stats.py` 与 `test_regression.py` 纯代码测试:`_validate` 早返三态、`_strip_stata_noncode` 各注释/字符串形式、`_check_*` 全覆盖/缺失/子串/大小写四态、HumanMessage 含 `<inputs>`+`<reminder>` 且无工作流时序泄漏、节点入口 raise 路径。无 LLM/MCP mock。
+    - SignCheck `(variable_name, expected_sign, actual_sign, consistent)` 由 LLM 自填(state.py 中是单对象不是 list,只对 `core_hypothesis.variable_name` 一个变量做比对)。
+  - **质量门禁**:pytest / ruff lint / ruff format / pyright / import-linter 全 PASS;custom lint FAIL 项均为 PROGRESS.md 此前已记录的存量(`subgraphs/probe/pure.py` 627 行 ERROR、CLAUDE.md 架构树未维护具体文件的 WARN);本次新引入边缘 WARN:`_stata_agent.py` 310 行触发文件大小阈值(>300 但 <500),与 `cli.py`/`tracer.py` 同档次,五职责拆分会牺牲清晰度,接受现状。
+  - **未做端到端 smoke**:需真 Stata + .env 配 `STATA_EXECUTOR_STATA_EXECUTABLE`+`HARNESS_WORKSPACES_ROOT`+LLM API key 的环境;按用户记忆 `feedback_pure_code_tests_only`,集成测试不进本仓,留作下一步手动验证。
+
+- 上上次会话 — 修复 `descriptive_stats` 节点首次启动 stata-executor MCP 子进程时 `McpError: Connection closed`:
   - 根因:`clients/stata.py:43` 用 `args=["-m", "stata_executor.adapters.mcp"]`,而 `adapters/mcp.py` 顶层只定义 `main()` 函数、无 `if __name__ == "__main__":` 守卫,`adapters/` 也无 `__main__.py` → `python -m pkg.sub.module` 直接执行该模块顶层即结束 → 子进程 `exit 0`,MCP server 从未运行,父进程在 `session.initialize()` 收到 `Connection closed`(被 anyio TaskGroup 包成 `ExceptionGroup`)。
   - 修复:`args` 改为 `["-m", "stata_executor"]`,触发 `stata_executor/__main__.py` 的 `raise SystemExit(main())`;与 `clients/csmar.py` 的 `["-m", "csmar_mcp"]` 形态对齐。
   - 验证:`get_stata_tools()` 现在加载 doctor/run_do/run_inline 3 个工具;keep-alive stdin 实测下 broken entry 立即 `exit 0`,fixed entry 持续监听。
@@ -46,7 +69,7 @@
 - **MVP 本地 CLI 已完成**,**面向 Claude 的可观测性基础设施已落地**。所有 25+F26 个 feature passes=true,ReAct 子图已迁移到 `create_agent`,`.harness/runs/` 持久化 trace 接管 LangSmith 在调试场景下的角色。下一阶段方向由用户决定:
   - (a) **基础设施端到端验证**:启动 CSMAR-Data-MCP / Stata-Executor-MCP 服务,配 DashScope API key,实际跑 `harness-stata node-run data_cleaning --from-fixture 01_capital_structure_roa` 与 `harness-stata node-run data_probe --from-fixture 01_capital_structure_roa`,验证 trace 字段、子图嵌套、LLM/tool 事件归属是否符合预期。
   - (b) 真实端到端全流程:跑 `harness-stata run` 真实 UserRequest 验证 LLM + MCP 链路 + 完整 trace 覆盖 8 节点。
-  - (c) 节点形态设计扩展:`descriptive_stats` 与 `regression` 节点本期未纳入单跑(行为待设计),后续敲定后加入 `NODE_REGISTRY`。
+  - (c) `descriptive_stats` 与 `regression` 节点已落地(本次会话),纯代码测试已通过;待跑真 Stata + LLM 端到端 smoke,跑通后将两节点加入 `observability/registry.NODE_REGISTRY` 支持单跑。
   - (d) 技术债清理:stata-executor ruff+pyright 收口 / tests/ 纳入 ruff format 门禁 / data_cleaning.py:202 Scalar/complex pyright 存量。
   - (e) Web 迭代启动:把 CLI 换成 HTTP/WS 适配层,checkpointer 升级为 SqliteSaver 以跨进程 resume。
   - (f) 功能扩展:稳健性回归 / 异质性分析 / 可视化等非 MVP feature。

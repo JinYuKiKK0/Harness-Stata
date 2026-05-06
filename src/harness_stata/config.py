@@ -29,6 +29,7 @@ class Settings:
     stata_executable: str
     stata_edition: str
     downloads_root: Path
+    workspaces_root: Path
     planning_agent_max_calls: int
     fallback_react_max_calls: int
     cleaning_coverage_threshold: float
@@ -90,6 +91,13 @@ def get_settings() -> Settings:
     else:
         downloads_root = PROJECT_ROOT / "downloads"
 
+    workspaces_root_raw = env.get("HARNESS_WORKSPACES_ROOT")
+    if workspaces_root_raw:
+        candidate = Path(workspaces_root_raw)
+        workspaces_root = candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
+    else:
+        workspaces_root = PROJECT_ROOT / "workspaces"
+
     planning_agent_max_calls = _parse_positive_int(
         env, "HARNESS_PLANNING_AGENT_MAX_CALLS", default="8"
     )
@@ -136,6 +144,7 @@ def get_settings() -> Settings:
         stata_executable=stata_executable,
         stata_edition=env.get("STATA_EXECUTOR_EDITION", "mp"),
         downloads_root=downloads_root,
+        workspaces_root=workspaces_root,
         planning_agent_max_calls=planning_agent_max_calls,
         fallback_react_max_calls=fallback_react_max_calls,
         cleaning_coverage_threshold=cleaning_coverage_threshold,
