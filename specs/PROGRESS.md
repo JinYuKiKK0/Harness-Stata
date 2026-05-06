@@ -8,7 +8,14 @@
 
 <!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
-- 本次会话 — 修复 langchain-mcp-adapters 0.2.x 三处适配缺口 + Stata `case(preserve)` 契约硬化,3 fixture × 2 节点共 6 个端到端跑全部 0 次 ReAct 自愈通过:
+- 本次会话 — 给 Stata 节点(`descriptive_stats` / `regression`)补 RTF 三线表导出能力 + 跨列行对齐机制约束:
+  - **prompt 增量**(机制式正向表述,非禁令清单):两 prompt 各加 `## 表格导出` 段。`descriptive_stats.md` 推荐 `estpost summarize` → `esttab using "<rtf_table_path>", cells(...) booktabs replace`。`regression.md` 写明跨列对齐机制——`esttab` 以变量名为行键合并 `eststo` 结果,缺失单元格自动留空,因此跨 `eststo` 必须用严格相同变量名(case-sensitive),让模型自行推出"别为每列单写表"。`<reminder>` 末尾追加"`rtf_table_path` 已通过 `esttab using` 成功导出"终止条件。
+  - **协议层接管 RTF 路径**:文件名规范 `01_descriptive_stats.rtf` / `02_regression.rtf` 由节点常量 `_RTF_FILENAME` 固化,**不进 prompt**(避免双源契约)。`_stata_agent.py` 的 `_resolve_workspace` 改为 public `resolve_stata_workspace`;节点先取 workspace,拼出 `<workspace>/<filename>` 绝对路径,渲染进 HumanMessage `<inputs>` 的 `## rtf_table_path` 字段,再把同一 workspace 传给 `run_stata_agent`。后续 robustness/heterogeneity 节点按 `03_*.rtf` / `04_*.rtf` 顺延即可。
+  - **state schema 同步**:`DescStatsReport` / `RegressionResult` 各加 `rtf_table_path: str` 字段;两节点返回值新增 `str(rtf_path)`;`docs/state.md` 字段表更新。
+  - **测试更新**:两个节点的 `_build_human_prompt` 测试加入 rtf_path 参数与"prompt 含 rtf_table_path / 路径字面量 / esttab using"断言。
+  - **质量门禁**:pytest / ruff lint / ruff format / pyright / import-linter 全 PASS;custom lint 仅存量 ERROR(`probe/pure.py 627 行`)+ 36 WARN,本次未引入新失败。
+
+- 上次会话 — 修复 langchain-mcp-adapters 0.2.x 三处适配缺口 + Stata `case(preserve)` 契约硬化,3 fixture × 2 节点共 6 个端到端跑全部 0 次 ReAct 自愈通过:
   - **MCP 适配修复**(`src/harness_stata/nodes/_stata_agent.py`):
     1. 新增 `_unwrap_mcp_payload` helper 把 adapter 0.2.x 的 `list[ContentBlock]` 形态(`[{"type":"text","text":"<json>","id":...}, ...]`)归一为原生 dict;`_doctor_precondition` 与 `_make_run_inline_wrapped` 共用。
     2. `run_inline` 闭包 `try ... except ToolException as exc: raw = str(exc)` —— adapter 在 `CallToolResult.isError=True` 时直接 raise,error_msg 即完整 ExecutionResult JSON;捕获后回流给 LLM 走 ReAct 自愈路径。

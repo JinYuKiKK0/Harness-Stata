@@ -15,6 +15,14 @@
 - **不要**在跑通基准方程之前自己加额外控制变量、改函数形式、或扫规格——本节点只跑基准回归;实证调整由其他节点负责。
 - 注释可加,但 `core_hypothesis.variable_name` 必须出现在命令位置,而不仅在注释里。
 
+## 表格导出
+
+跑通方程后,把回归结果导出为 RTF 三线表到 `<inputs>` 给出的 `rtf_table_path`,直接 `using "<rtf_table_path>"`。
+
+- 多列写法:每条回归先 `eststo <name>: <regress 命令>` 注册,再单次 `esttab <m1> <m2> ... using "<rtf_table_path>", b(3) se(3) star(* 0.1 ** 0.05 *** 0.01) rtf replace` 一次性输出。
+- 跨列对齐机制:`esttab` 以变量名为行键合并多个 `eststo` 结果,缺失单元格自动留空 → 同一变量在不同 `eststo` 中必须用严格相同的名字(case-sensitive),否则会被识别为两条独立的行。
+- 若需隐藏部分系数(如固定效应虚拟项)的展示,使用 `esttab` 的 `indicate(...)` / `drop(...)` 选项控制可见性 → 行集合仍由 esttab 统一管理,行对齐不被破坏。
+
 ## 工具策略
 
 每轮调用 run_inline 提交一段完整的 do 代码字符串(每次重写完整版本)。读取返回的 ExecutionResult:
@@ -27,7 +35,7 @@
 
 ## 终止策略
 
-满足"do 代码严格反映 `equation`"、"最近一次执行 `status="succeeded"` 且 `result_text` 含完整系数表"、"已从系数表中读出 `core_hypothesis.variable_name` 的实际符号"三点后,调用结构化输出工具上报回归核心结果总结与符号检查。
+满足"do 代码严格反映 `equation`"、"最近一次执行 `status="succeeded"` 且 `result_text` 含完整系数表"、"已从系数表中读出 `core_hypothesis.variable_name` 的实际符号"、"`rtf_table_path` 已通过 `esttab using` 成功导出"四点后,调用结构化输出工具上报回归核心结果总结与符号检查。
 
 判据:
 - 系数为正(>0)→ actual_sign = `+`;系数为负(<0)→ actual_sign = `-`;系数为 0 视为与预期不一致并记 `+`。

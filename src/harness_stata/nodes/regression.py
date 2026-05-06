@@ -10,12 +10,13 @@ Agent 严格按 ``model_plan.equation`` 的方程结构跑回归,不自主调整
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Literal, TypedDict
 
 import pandas as pd
 from pydantic import BaseModel, Field
 
-from harness_stata.nodes._stata_agent import run_stata_agent
+from harness_stata.nodes._stata_agent import resolve_stata_workspace, run_stata_agent
 from harness_stata.prompts import load_prompt
 from harness_stata.state import (
     EmpiricalSpec,
@@ -29,6 +30,7 @@ from harness_stata.state import (
 
 _ITER_CAP = 10
 _PREVIEW_ROWS = 3
+_RTF_FILENAME = "02_regression.rtf"
 
 
 class _SignCheckOutput(BaseModel):
@@ -96,7 +98,9 @@ def _format_data_structure(reqs: list[str]) -> str:
     return "\n".join(f"- {r}" for r in reqs)
 
 
-def _build_human_prompt(spec: EmpiricalSpec, plan: ModelPlan, merged: MergedDataset) -> str:
+def _build_human_prompt(
+    spec: EmpiricalSpec, plan: ModelPlan, merged: MergedDataset, rtf_path: Path
+) -> str:
     """渲染 HumanMessage:`<inputs>` (按决策依赖深度排) + `<reminder>`。"""
     file_path = merged["file_path"]
     columns_block = _format_columns(merged["columns"])
@@ -120,12 +124,16 @@ def _build_human_prompt(spec: EmpiricalSpec, plan: ModelPlan, merged: MergedData
         "## data_structure_requirements\n"
         f"{_format_data_structure(plan['data_structure_requirements'])}\n\n"
         f"## analysis_granularity\n`{spec['analysis_granularity']}`\n\n"
+        "## rtf_table_path\n"
+        f'`{rtf_path!s}` 是 RTF 三线表的导出绝对路径,直接 `using "<rtf_table_path>"`,'
+        "不要自造其他路径。\n\n"
         "</inputs>\n\n"
         "<reminder>\n"
         "终止前必须满足:do 代码严格按 `equation` 写出方程(自变量、控制变量、固定效应"
         '项与 equation 中标注的一致);最近一次执行 `status="succeeded"` 且 '
         "`result_text` 含可读的回归系数表;在系数表中读取 `core_hypothesis.variable_name` "
-        "的实际系数符号,与 `expected_sign` 比对填入符号检查结果。\n"
+        "的实际系数符号,与 `expected_sign` 比对填入符号检查结果;`rtf_table_path` 已通过 "
+        "`esttab using` 成功导出。\n"
         "满足后,调用结构化输出工具上报回归总结与符号检查终止。\n"
         "</reminder>"
     )
@@ -163,7 +171,7 @@ def _payload_to_sign_check(payload_sc: _SignCheckOutput) -> SignCheck:
 
 
 async def regression(state: WorkflowState) -> RegressionOutput:
-    """对 MergedDataset 跑基准回归,产出 do/log 路径、符号检查与文字总结。"""
+    """对 MergedDataset 跑基准回归,产出 do/log/rtf 路径、符号检查与文字总结。"""
     err = _validate(state)
     if err is not None:
         raise ValueError(err)
@@ -172,10 +180,14 @@ async def regression(state: WorkflowState) -> RegressionOutput:
     plan: ModelPlan = state["model_plan"]
     merged: MergedDataset = state["merged_dataset"]
 
+    workspace = resolve_stata_workspace("regression")
+    rtf_path = workspace / _RTF_FILENAME
+
     payload, do_path, log_path = await run_stata_agent(
         node_name="regression",
+        workspace=workspace,
         system_prompt=load_prompt("regression"),
-        human_message=_build_human_prompt(spec, plan, merged),
+        human_message=_build_human_prompt(spec, plan, merged, rtf_path),
         output_schema=_RegressionOutput,
         iter_cap=_ITER_CAP,
         post_check_fn=lambda cmds: _check_core_var_present(cmds, plan),
@@ -184,6 +196,7 @@ async def regression(state: WorkflowState) -> RegressionOutput:
         "regression_result": {
             "do_file_path": do_path,
             "log_file_path": log_path,
+            "rtf_table_path": str(rtf_path),
             "sign_check": _payload_to_sign_check(payload.sign_check),
             "summary": payload.summary,
         },

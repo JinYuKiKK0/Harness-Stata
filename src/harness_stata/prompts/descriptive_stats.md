@@ -12,6 +12,13 @@
 - 时间窗口:若 `sample / time / frequency` 描述的时间范围与 csv 实际范围不一致,用 `keep if` 在统计前对齐到目标窗口。
 - 注释可加,但变量名必须出现在命令位置,而不仅在注释里。
 
+## 表格导出
+
+完成 `summarize` / `tabulate` 等统计命令后,把结果导出为 RTF 三线表到 `<inputs>` 给出的 `rtf_table_path`,直接 `using "<rtf_table_path>"`。
+
+- 推荐路径:`estpost summarize <vars>, detail` → `esttab using "<rtf_table_path>", cells("count mean(fmt(3)) sd(fmt(3)) min(fmt(3)) p50(fmt(3)) max(fmt(3))") nomtitle nonumbers rtf replace`。
+- 行键由变量名决定:`esttab` 自动用变量名作为行标签,跨变量自动对齐,无需手工排列。
+
 ## 工具策略
 
 每轮调用 run_inline 提交一段完整的 do 代码字符串(每次重写完整版本,不要假设上一轮的 do 仍在 Stata 内存中)。读取返回的 ExecutionResult:
@@ -24,6 +31,6 @@
 
 ## 终止策略
 
-满足"`variables` 列出的所有变量名都已被 do 代码以 `summarize` / `tabulate` / `xtsum` / `misstable` 等命令直接命中"且"最近一次执行 `status="succeeded"` 且 `result_text` 含可读统计输出"两点后,调用结构化输出工具上报核心数据观察总结。
+满足"`variables` 列出的所有变量名都已被 do 代码以 `summarize` / `tabulate` / `xtsum` / `misstable` 等命令直接命中"、"最近一次执行 `status="succeeded"` 且 `result_text` 含可读统计输出"、"`rtf_table_path` 已通过 `esttab using` 成功导出"三点后,调用结构化输出工具上报核心数据观察总结。
 
 总结的语义判据:覆盖样本量、关键变量的集中/离散趋势、显著的缺失或异常分布;不解释经济学含义、不下因果结论。

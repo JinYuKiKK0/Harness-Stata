@@ -213,22 +213,24 @@
 
 由描述性统计节点写入。Terminal 产出物，面向用户阅读，不被下游节点消费。
 
-| 字段          | 类型 | 说明                     |
-| ------------- | ---- | ------------------------ |
-| do_file_path  | str  | do 文件路径              |
-| log_file_path | str  | Stata 日志路径           |
-| summary       | str  | LLM 生成的描述性统计概述 |
+| 字段           | 类型 | 说明                                                      |
+| -------------- | ---- | --------------------------------------------------------- |
+| do_file_path   | str  | do 文件路径                                               |
+| log_file_path  | str  | Stata 日志路径                                            |
+| rtf_table_path | str  | RTF 三线表路径（节点预分配，文件名 `01_descriptive_stats.rtf`） |
+| summary        | str  | LLM 生成的描述性统计概述                                  |
 
 #### RegressionResult
 
 由基准回归节点写入。Terminal 产出物，包含结构化的符号校验。
 
-| 字段          | 类型      | 说明                     |
-| ------------- | --------- | ------------------------ |
-| do_file_path  | str       | do 文件路径              |
-| log_file_path | str       | Stata 日志路径           |
-| sign_check    | SignCheck | 核心系数的符号一致性校验 |
-| summary       | str       | LLM 生成的回归结果概述   |
+| 字段           | 类型      | 说明                                                |
+| -------------- | --------- | --------------------------------------------------- |
+| do_file_path   | str       | do 文件路径                                         |
+| log_file_path  | str       | Stata 日志路径                                      |
+| rtf_table_path | str       | RTF 三线表路径（节点预分配，文件名 `02_regression.rtf`） |
+| sign_check     | SignCheck | 核心系数的符号一致性校验                            |
+| summary        | str       | LLM 生成的回归结果概述                              |
 
 **SignCheck**
 

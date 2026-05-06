@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +18,8 @@ from harness_stata.nodes.regression import (
     regression,
 )
 from harness_stata.state import EmpiricalSpec, MergedDataset, ModelPlan, WorkflowState
+
+_FAKE_RTF = Path("/tmp/02_regression.rtf")
 
 
 def _make_merged() -> MergedDataset:
@@ -187,7 +190,7 @@ def test_human_prompt_contains_equation_and_hypothesis(
     make_model_plan: Callable[..., ModelPlan],
 ) -> None:
     prompt = _build_human_prompt(
-        make_empirical_spec(), make_model_plan(), _make_merged()
+        make_empirical_spec(), make_model_plan(), _make_merged(), _FAKE_RTF
     )
     assert "<inputs>" in prompt and "<reminder>" in prompt
     assert "ROA_it = a + b*DIGITAL_it" in prompt
@@ -197,6 +200,10 @@ def test_human_prompt_contains_equation_and_hypothesis(
     # 数据
     assert "`/tmp/merged.csv`" in prompt
     assert "`stkcd`" in prompt
+    # rtf 路径与终止条件
+    assert "rtf_table_path" in prompt
+    assert str(_FAKE_RTF) in prompt
+    assert "esttab using" in prompt
     assert "结构化输出工具" in prompt
 
 
@@ -205,7 +212,7 @@ def test_human_prompt_no_workflow_timing_leakage(
     make_model_plan: Callable[..., ModelPlan],
 ) -> None:
     prompt = _build_human_prompt(
-        make_empirical_spec(), make_model_plan(), _make_merged()
+        make_empirical_spec(), make_model_plan(), _make_merged(), _FAKE_RTF
     )
     forbidden = [
         "model_construction 节点",

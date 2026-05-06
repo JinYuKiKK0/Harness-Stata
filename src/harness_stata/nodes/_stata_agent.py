@@ -39,8 +39,12 @@ _ARTIFACT_GLOBS = (
 _BOOTSTRAP_ERROR_KINDS = frozenset({"bootstrap_error"})
 
 
-def _resolve_workspace(node_name: NodeName) -> Path:
-    """`<workspaces_root>/<node_name>/<run_id>/` —— 与 stata-executor job_id 同款公式。"""
+def resolve_stata_workspace(node_name: NodeName) -> Path:
+    """`<workspaces_root>/<node_name>/<run_id>/` —— 与 stata-executor job_id 同款公式。
+
+    暴露给节点调用方在构造 HumanMessage 之前预分配 RTF 等输出 artifact 路径,
+    再把同一 workspace 传给 ``run_stata_agent`` 复用。
+    """
     settings = get_settings()
     run_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
     workspace = settings.workspaces_root / node_name / run_id
@@ -242,6 +246,7 @@ def _last_error_kind(history: list[dict[str, Any]]) -> str | None:
 async def run_stata_agent[T: BaseModel](
     *,
     node_name: NodeName,
+    workspace: Path,
     system_prompt: str,
     human_message: str,
     output_schema: type[T],
@@ -250,13 +255,15 @@ async def run_stata_agent[T: BaseModel](
 ) -> tuple[T, str, str]:
     """驱动一轮 Stata ReAct 节点的完整生命周期。
 
+    ``workspace`` 由调用方通过 ``resolve_stata_workspace`` 预分配,以便节点先在
+    其下规划好 RTF 等输出 artifact 路径,渲染进 HumanMessage 后再交给本 helper。
+
     成功:返回 ``(payload, do_file_path, log_file_path)``,后两者是绝对路径,从
     最后一次 succeeded ExecutionResult.artifacts 中筛 ``input.do`` 与 ``run.log`` 得到。
 
     失败 (超轮 / 缺结构化输出 / 缺成功执行 / bootstrap_error / post-check 不通过 /
     缺 artifacts) 一律 dump 现场到 ``<workspace>/_failure/dump.txt`` 后 raise。
     """
-    workspace = _resolve_workspace(node_name)
     history: list[dict[str, Any]] = []
     async with get_stata_tools() as stata_tools:
         tools_list = list(stata_tools)

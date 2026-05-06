@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +16,8 @@ from harness_stata.nodes.descriptive_stats import (
     descriptive_stats,
 )
 from harness_stata.state import EmpiricalSpec, MergedDataset, WorkflowState
+
+_FAKE_RTF = Path("/tmp/01_descriptive_stats.rtf")
 
 
 def _make_merged() -> MergedDataset:
@@ -173,7 +176,7 @@ def test_human_prompt_contains_inputs_and_reminder_blocks(
 ) -> None:
     spec = make_empirical_spec()
     merged = _make_merged()
-    prompt = _build_human_prompt(spec, merged)
+    prompt = _build_human_prompt(spec, merged, _FAKE_RTF)
     assert "<inputs>" in prompt and "</inputs>" in prompt
     assert "<reminder>" in prompt and "</reminder>" in prompt
     assert "merged_dataset_path" in prompt
@@ -183,6 +186,10 @@ def test_human_prompt_contains_inputs_and_reminder_blocks(
     assert "`ROA`" in prompt
     # 变量定义
     assert "DIGITAL" in prompt
+    # rtf 路径与终止条件
+    assert "rtf_table_path" in prompt
+    assert str(_FAKE_RTF) in prompt
+    assert "esttab using" in prompt
     # reminder 应复述终止条件
     assert "结构化输出工具" in prompt
 
@@ -191,7 +198,7 @@ def test_human_prompt_no_workflow_timing_leakage(
     make_empirical_spec: Callable[..., EmpiricalSpec],
 ) -> None:
     """agent-node-prompting skill 红线:不渲染上下游身份/工作流时序。"""
-    prompt = _build_human_prompt(make_empirical_spec(), _make_merged())
+    prompt = _build_human_prompt(make_empirical_spec(), _make_merged(), _FAKE_RTF)
     forbidden = ["data_cleaning 节点", "上游已完成", "下游会用", "工作流"]
     for token in forbidden:
         assert token not in prompt, f"prompt 不应出现工作流时序短语: {token!r}"

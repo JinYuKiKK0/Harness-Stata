@@ -142,12 +142,14 @@ class MergedDataset(TypedDict):
 class DescStatsReport(TypedDict):
     do_file_path: str
     log_file_path: str
+    rtf_table_path: str
     summary: str
 
 
 class RegressionResult(TypedDict):
     do_file_path: str
     log_file_path: str
+    rtf_table_path: str
     sign_check: SignCheck
     summary: str
 

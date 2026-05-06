@@ -48,6 +48,10 @@
 **现象/根因** — Stata 17 `import delimited "...", clear` 默认 `case(lower)`,把 csv 表头(无论原始大小写)一律转小写后落到 Stata 变量名。即便 csv 表头是 `ROA,Leverage,...`,加载后 `describe` 显示的变量名也是 `roa,leverage,...`。LLM 看到 EmpiricalSpec 是 PascalCase 自然写 `summarize ROA Leverage` → `variable ROA not found r(111)`,白白浪费一轮 ReAct 自愈。
 **方案** — 跨节点契约 + 显式 case 选项双重保障:(1) `prompts/data_cleaning.md` 强制最终 csv 列名与 `EmpiricalSpec.variables[*].name` 字节级一致(含大小写),不做 snake_case / lower 等任何变换;(2) `prompts/descriptive_stats.md` 与 `prompts/regression.md` 显式要求 `import delimited "...", case(preserve) clear`,跳过 Stata 的 case(lower) 默认行为;(3) 删除"csv 首行若有大小写差异先 rename 对齐"防御层,`EmpiricalSpec.variables` 即真理之源,直接用。
 
+### [x] `esttab` 不从文件名后缀推断格式;`booktabs` 是 LaTeX 模式专属选项 — [依赖坑]
+**现象/根因** — `esttab using "out.rtf", ... booktabs replace` 产出的不是 RTF,而是带 `\toprule`/`\midrule`/`\bottomrule`/`\addlinespace` 的 LaTeX 源码,Word 打开就是一堆反斜杠看着像乱码。原因:`esttab` 的输出格式由显式选项(`rtf` / `tex` / `csv` / `html` 等)决定,**完全不看文件名后缀**;而 `booktabs` 是 LaTeX 的 `\toprule` 等命令开关,esttab 看到 `booktabs` 就切到 LaTeX 输出路径。
+**方案** — `prompts/descriptive_stats.md` 与 `prompts/regression.md` 的"## 表格导出"段:推荐命令显式 `rtf` 选项,不叠加 `booktabs`;补一句机制说明"格式由显式选项控制,不从后缀推断;`rtf` 模式下 esttab 默认在表头/中/底各画一条横线,即三线表样式"。让 LLM 自然推出"用 rtf,不要 booktabs"。
+
 ---
 
 ## LangGraph / 状态机
