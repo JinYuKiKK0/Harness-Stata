@@ -28,7 +28,8 @@
     - `config.py` 新增 `Settings.workspaces_root`(读 `HARNESS_WORKSPACES_ROOT`,默认 `<root>/workspaces`);严格遵守 `dotenv_values`-only 注入(无系统 env fallback)。
     - 新增 `tests/nodes/test_descriptive_stats.py` 与 `test_regression.py` 纯代码测试:`_validate` 早返三态、`_strip_stata_noncode` 各注释/字符串形式、`_check_*` 全覆盖/缺失/子串/大小写四态、HumanMessage 含 `<inputs>`+`<reminder>` 且无工作流时序泄漏、节点入口 raise 路径。无 LLM/MCP mock。
     - SignCheck `(variable_name, expected_sign, actual_sign, consistent)` 由 LLM 自填(state.py 中是单对象不是 list,只对 `core_hypothesis.variable_name` 一个变量做比对)。
-  - **质量门禁**:pytest / ruff lint / ruff format / pyright / import-linter 全 PASS;custom lint FAIL 项均为 PROGRESS.md 此前已记录的存量(`subgraphs/probe/pure.py` 627 行 ERROR、CLAUDE.md 架构树未维护具体文件的 WARN);本次新引入边缘 WARN:`_stata_agent.py` 310 行触发文件大小阈值(>300 但 <500),与 `cli.py`/`tracer.py` 同档次,五职责拆分会牺牲清晰度,接受现状。
+  - **后续合并** — 用户指出 `_agent_runner.run_structured_agent` 与 `_stata_agent._run_react_loop` 是重复造轮子(装配代码逐行一致,差异只在异常处理策略)。合并:把 `run_structured_agent` 改为非抛异常接口,返回 `(payload | None, messages, AgentRunFailure | None)`,失败语义归调用方;`data_cleaning` 加 4 行显式 raise,`_stata_agent` 删 32 行 `_run_react_loop` 直接复用。结果:`_stata_agent.py` 273 行(回到 300 阈值以下,文件大小 WARN 消失)。
+  - **质量门禁**:pytest / ruff lint / ruff format / pyright / import-linter 全 PASS;custom lint FAIL 项均为 PROGRESS.md 此前已记录的存量(`subgraphs/probe/pure.py` 627 行 ERROR、CLAUDE.md 架构树未维护具体文件的 WARN);本次未引入新失败。
   - **未做端到端 smoke**:需真 Stata + .env 配 `STATA_EXECUTOR_STATA_EXECUTABLE`+`HARNESS_WORKSPACES_ROOT`+LLM API key 的环境;按用户记忆 `feedback_pure_code_tests_only`,集成测试不进本仓,留作下一步手动验证。
 
 - 上上次会话 — 修复 `descriptive_stats` 节点首次启动 stata-executor MCP 子进程时 `McpError: Connection closed`:

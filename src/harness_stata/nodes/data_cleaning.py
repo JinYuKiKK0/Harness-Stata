@@ -30,7 +30,7 @@ from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
 from harness_stata.config import get_settings
-from harness_stata.nodes._agent_runner import run_structured_agent
+from harness_stata.nodes._agent_runner import AgentRunFailure, run_structured_agent
 from harness_stata.nodes._writes import awrites_to
 from harness_stata.prompts import load_prompt
 from harness_stata.state import (
@@ -428,14 +428,21 @@ async def data_cleaning(state: WorkflowState) -> MergedDataset:
     try:
         view_metas = _register_sources(conn, files)
         sql_tool = _make_sql_tool(conn)
-        payload, _ = await run_structured_agent(
+        payload, _, failure = await run_structured_agent(
             tools=[sql_tool],
             system_prompt=load_prompt("data_cleaning"),
             output_schema=_CleaningOutput,
             human_message=_build_human_prompt(spec, files, view_metas),
             max_iterations=_MAX_ITERATIONS,
-            node_name="data_cleaning",
         )
+        if failure is AgentRunFailure.ITER_CAP_EXCEEDED:
+            msg = (
+                f"data_cleaning: ReAct reached max_iterations ({_MAX_ITERATIONS})"
+                f" without a terminal response"
+            )
+            raise RuntimeError(msg)
+        if payload is None:
+            raise RuntimeError("data_cleaning: agent did not produce a structured response")
         final_view = payload.final_view
         primary_key = list(payload.primary_key)
         if not final_view:

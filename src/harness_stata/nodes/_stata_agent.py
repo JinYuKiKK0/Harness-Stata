@@ -15,17 +15,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from langchain.agents import create_agent
-from langchain.agents.middleware import ModelCallLimitMiddleware
-from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
-from langchain.agents.structured_output import ToolStrategy
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel
 
-from harness_stata.clients.llm import get_chat_model
 from harness_stata.clients.stata import get_stata_tools
 from harness_stata.config import get_settings
+from harness_stata.nodes._agent_runner import AgentRunFailure, run_structured_agent
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -126,40 +122,6 @@ def _make_run_inline_wrapped(
     return run_inline
 
 
-async def _run_react_loop[T: BaseModel](
-    *,
-    tools: list[BaseTool],
-    system_prompt: str,
-    human_message: str,
-    output_schema: type[T],
-    iter_cap: int,
-) -> tuple[T | None, list[BaseMessage], bool]:
-    """单 ReAct 循环装配 + ainvoke。
-
-    返回 ``(payload, messages, hit_iter_cap)``。超轮在本函数内 catch,由调用方在
-    dump 现场后再 raise,以便消息序列也能进 dump。
-    """
-    agent = create_agent(
-        model=get_chat_model(),
-        tools=tools,
-        system_prompt=system_prompt,
-        middleware=[
-            ModelCallLimitMiddleware(run_limit=iter_cap, exit_behavior="error"),
-        ],
-        response_format=ToolStrategy(output_schema),
-    )
-    initial: Any = {"messages": [HumanMessage(content=human_message)]}
-    try:
-        result: dict[str, Any] = await agent.ainvoke(initial)
-    except ModelCallLimitExceededError:
-        return None, [], True
-    payload_raw = result.get("structured_response")
-    messages_raw = result.get("messages")
-    messages: list[BaseMessage] = messages_raw if isinstance(messages_raw, list) else []
-    payload = payload_raw if isinstance(payload_raw, output_schema) else None
-    return payload, messages, False
-
-
 def _last_succeeded_entry(history: list[dict[str, Any]]) -> dict[str, Any] | None:
     for entry in reversed(history):
         result = entry.get("execution_result")
@@ -258,19 +220,19 @@ async def run_stata_agent[T: BaseModel](
         await _doctor_precondition(tools_list)
         run_inline_orig = _find_tool(tools_list, "run_inline")
         run_inline_wrapped = _make_run_inline_wrapped(run_inline_orig, workspace, history)
-        payload, messages, hit_iter_cap = await _run_react_loop(
+        payload, messages, failure = await run_structured_agent(
             tools=[run_inline_wrapped],
             system_prompt=system_prompt,
-            human_message=human_message,
             output_schema=output_schema,
-            iter_cap=iter_cap,
+            human_message=human_message,
+            max_iterations=iter_cap,
         )
 
-    if hit_iter_cap:
+    if failure is AgentRunFailure.ITER_CAP_EXCEEDED:
         _dump_failure(workspace, history, messages, reason=f"reached max_iterations ({iter_cap})")
         msg = f"{node_name}: ReAct reached max_iterations ({iter_cap}) without a terminal response"
         raise RuntimeError(msg)
-    if payload is None:
+    if failure is AgentRunFailure.NO_STRUCTURED_RESPONSE or payload is None:
         _dump_failure(workspace, history, messages, reason="no structured_response")
         msg = f"{node_name}: agent did not produce a structured response"
         raise RuntimeError(msg)
