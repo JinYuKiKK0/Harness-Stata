@@ -1,12 +1,11 @@
 """Shared helper to run one ``create_agent`` ReAct loop with structured output.
 
-Used by ``data_cleaning`` / ``descriptive_stats`` / ``regression`` — they share
-the same装配 + ainvoke + payload 校验 pattern. Differences live in the caller
-(tools source, prompt, schema, iteration cap, post-processing).
+Used by ``data_cleaning``. Encapsulates the 装配 + ainvoke + payload 校验
+pattern; differences live in the caller (tools source, prompt, schema,
+iteration cap, post-processing).
 
-Returns ``(payload, messages)``. ``messages`` is the full message log so that
-post-hoc inspection (e.g. ``regression`` reading the last ``run_do``
-ToolMessage) does not require a second invocation.
+Returns ``(payload, messages)``. ``messages`` is the full message log for
+post-hoc inspection by callers that need to read raw ToolMessage payloads.
 """
 
 from __future__ import annotations
