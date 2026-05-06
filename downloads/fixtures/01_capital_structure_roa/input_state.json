@@ -161,5 +161,26 @@
         ]
       }
     ]
+  },
+  "merged_dataset": {
+    "file_path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/01_capital_structure_roa/merged.csv",
+    "row_count": 52755,
+    "columns": ["Stkcd", "year", "ROA", "Leverage", "Size", "Growth", "Top1", "FirmAge", "BoardSize"],
+    "warnings": []
+  },
+  "model_plan": {
+    "model_type": "双向固定效应面板模型",
+    "equation": "$$ROA_{i,t} = \\alpha + \\beta_1 Leverage_{i,t} + \\sum_{k=1}^{n} \\gamma_k Controls_{k,i,t} + \\mu_i + \\delta_t + \\varepsilon_{i,t}$$",
+    "core_hypothesis": {
+      "variable_name": "Leverage",
+      "expected_sign": "-",
+      "rationale": "权衡理论与代理理论一致认为,过高杠杆放大财务困境成本与债权人监督成本,挤压净利润空间;主流实证文献多发现 Leverage 与 ROA 显著负相关。"
+    },
+    "data_structure_requirements": [
+      "面板数据组织,以 firm-year 为基本观测单元",
+      "时间跨度 2013-2023 共 11 期,满足双向固定效应估计稳健性的下限",
+      "样本规模建议至少 100 家公司以提供个体固定效应识别力",
+      "允许非平衡面板(部分公司可能上市时间不足全样本期)"
+    ]
   }
 }

@@ -137,5 +137,26 @@
         ]
       }
     ]
+  },
+  "merged_dataset": {
+    "file_path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/02_digital_finance_liquidity/merged.csv",
+    "row_count": 2220,
+    "columns": ["bankcd", "year", "LC", "DIFI", "Size", "ROE", "NPL_ctrl", "CIR", "ProvinceName"],
+    "warnings": []
+  },
+  "model_plan": {
+    "model_type": "双向固定效应面板模型",
+    "equation": "$$LC_{i,t} = \\alpha + \\beta_1 DIFI_{i,t} + \\sum_{k=1}^{n} \\gamma_k Controls_{k,i,t} + \\mu_i + \\delta_t + \\varepsilon_{i,t}$$",
+    "core_hypothesis": {
+      "variable_name": "DIFI",
+      "expected_sign": "+",
+      "rationale": "数字普惠金融通过降低信息搜寻与匹配成本、推动表内表外业务协同,缓解银行流动性创造的资本与摩擦约束;主流文献多发现 DIFI 对商业银行流动性创造具有显著正向促进作用。"
+    },
+    "data_structure_requirements": [
+      "面板数据组织,以 bank-year 为基本观测单元",
+      "时间跨度 2013-2023 共 11 期,满足双向固定效应估计稳健性的下限",
+      "样本规模建议至少 30 家商业银行以覆盖国有大行/股份制/城商行/农商行各层",
+      "允许非平衡面板(不同银行成立或可观测时点不一)"
+    ]
   }
 }

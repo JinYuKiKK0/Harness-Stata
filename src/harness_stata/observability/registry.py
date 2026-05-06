@@ -17,6 +17,8 @@ from typing import Any
 
 from harness_stata.nodes.data_cleaning import data_cleaning
 from harness_stata.nodes.data_probe import data_probe
+from harness_stata.nodes.descriptive_stats import descriptive_stats
+from harness_stata.nodes.regression import regression
 from harness_stata.state import WorkflowState
 
 NodeRunnable = Callable[[WorkflowState], Awaitable[dict[str, Any]]]
@@ -24,9 +26,13 @@ NodeRunnable = Callable[[WorkflowState], Awaitable[dict[str, Any]]]
 NODE_REGISTRY: dict[str, NodeRunnable] = {
     "data_probe": data_probe,  # type: ignore[dict-item]
     "data_cleaning": data_cleaning,  # type: ignore[dict-item]
+    "descriptive_stats": descriptive_stats,  # type: ignore[dict-item]
+    "regression": regression,  # type: ignore[dict-item]
 }
 
 REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "data_probe": ("empirical_spec",),
     "data_cleaning": ("downloaded_files", "empirical_spec"),
+    "descriptive_stats": ("empirical_spec", "merged_dataset"),
+    "regression": ("empirical_spec", "merged_dataset", "model_plan"),
 }

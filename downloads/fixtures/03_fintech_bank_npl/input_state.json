@@ -176,5 +176,26 @@
         ]
       }
     ]
+  },
+  "merged_dataset": {
+    "file_path": "D:/Developments/PythonProject/Harness-Stata/downloads/fixtures/03_fintech_bank_npl/merged.csv",
+    "row_count": 4052,
+    "columns": ["Bankcd", "year", "NPL", "LLR", "LDR", "Size", "ROA", "CIR", "CAR", "ProvinceName", "DIF", "COV", "USE", "DIG", "GDPg"],
+    "warnings": []
+  },
+  "model_plan": {
+    "model_type": "双向固定效应面板模型",
+    "equation": "$$NPL_{i,t} = \\alpha + \\beta_1 DIF_{i,t} + \\sum_{k=1}^{n} \\gamma_k Controls_{k,i,t} + \\mu_i + \\delta_t + \\varepsilon_{i,t}$$",
+    "core_hypothesis": {
+      "variable_name": "DIF",
+      "expected_sign": "-",
+      "rationale": "金融科技借助大数据风控与机器学习模型显著提升商业银行的信贷筛查与不良识别效率,降低逆向选择与道德风险;主流实证文献多发现 DIF 对不良贷款率具有显著负向作用。"
+    },
+    "data_structure_requirements": [
+      "面板数据组织,以 bank-year 为基本观测单元",
+      "时间跨度 2011-2022 共 12 期,满足双向固定效应估计稳健性的下限",
+      "样本规模建议至少 30 家商业银行以提供个体固定效应识别力",
+      "允许非平衡面板(部分银行披露年限不足全样本期)"
+    ]
   }
 }
