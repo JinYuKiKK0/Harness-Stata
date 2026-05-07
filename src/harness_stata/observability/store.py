@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
 DEFAULT_HARNESS_DIR = ".harness"
 LATEST_FILE_NAME = "latest"
+INDEX_FILE_NAME = "index.jsonl"
 
 
 def generate_run_id() -> str:
@@ -118,7 +119,7 @@ class RunStore:
         (run_dir / "raw").mkdir()
         store = cls(root=root, run_id=meta["run_id"])
         store.write_meta(meta)
-        store._update_latest_pointer()
+        store._update_latest_pointer(meta["mode"])
         return store
 
     # ------------------------------------------------------------------
@@ -136,7 +137,9 @@ class RunStore:
         path = self.run_dir / "meta.json"
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def _update_latest_pointer(self) -> None:
+    def _update_latest_pointer(self, mode: str) -> None:
+        if mode != "full":
+            return
         latest = self.root / LATEST_FILE_NAME
         latest.write_text(self.run_id, encoding="utf-8")
 
@@ -204,3 +207,14 @@ class RunStore:
             encoding="utf-8",
         )
         return target
+
+    # ------------------------------------------------------------------
+    # Run-level index
+    # ------------------------------------------------------------------
+
+    def append_index(self, entry: dict[str, object]) -> None:
+        """Append one run summary line to ``<root>/index.jsonl``."""
+        path = self.root / INDEX_FILE_NAME
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False, default=str))
+            f.write("\n")

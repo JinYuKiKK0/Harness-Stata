@@ -100,16 +100,23 @@ class TestRunStoreCreate:
         assert loaded["status"] == "running"
 
     def test_updates_latest_pointer(self, tmp_path: Path) -> None:
-        store = RunStore.create(tmp_path, _meta("20260502T103500Z-aaaa"))
+        store = RunStore.create(tmp_path, _meta("20260502T103500Z-aaaa", mode="full"))
         latest = tmp_path / ".harness" / LATEST_FILE_NAME
         assert latest.read_text("utf-8") == store.run_id
 
     def test_second_run_overrides_latest(self, tmp_path: Path) -> None:
-        RunStore.create(tmp_path, _meta("20260502T100000Z-aaaa"))
-        store2 = RunStore.create(tmp_path, _meta("20260502T110000Z-bbbb"))
+        RunStore.create(tmp_path, _meta("20260502T100000Z-aaaa", mode="full"))
+        store2 = RunStore.create(tmp_path, _meta("20260502T110000Z-bbbb", mode="full"))
 
         latest = (tmp_path / ".harness" / LATEST_FILE_NAME).read_text("utf-8")
         assert latest == store2.run_id
+
+    def test_node_run_does_not_touch_latest(self, tmp_path: Path) -> None:
+        RunStore.create(tmp_path, _meta("20260502T100000Z-aaaa", mode="full"))
+        # Subsequent node-run must not overwrite the full-mode pointer.
+        RunStore.create(tmp_path, _meta("20260502T110000Z-bbbb", mode="node-run"))
+        latest = (tmp_path / ".harness" / LATEST_FILE_NAME).read_text("utf-8")
+        assert latest == "20260502T100000Z-aaaa"
 
     def test_concurrent_runs_isolated(self, tmp_path: Path) -> None:
         a = RunStore.create(tmp_path, _meta("20260502T100000Z-aaaa"))

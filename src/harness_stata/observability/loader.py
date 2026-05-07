@@ -73,7 +73,8 @@ class FixtureLoader:
         if not latest_file.is_file():
             raise FileNotFoundError(
                 f"no '{DEFAULT_HARNESS_DIR}/{LATEST_FILE_NAME}' pointer found;"
-                " run the full workflow once or pass --from-run / --from-fixture explicitly"
+                f" '{LATEST_FILE_NAME}' is updated only by full-mode runs."
+                " run the full workflow once, or pass --from-run <id> / --from-fixture <subdir> explicitly"
             )
         run_id = latest_file.read_text("utf-8").strip()
         if not run_id:

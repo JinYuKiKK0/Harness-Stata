@@ -2,13 +2,24 @@
 
 ## 当前焦点
 
-`observability/` 模块 6 项硬化(A1/A2/A3/B1/C1/C2)落地;tracer.py 经 `_helpers.py` 拆分回到 425 行,硬门禁全 PASS。
+`observability/` 6 项面向 Claude Code 调试体验的改进落地(run 级索引 / 同名子目录归属修 / 工具双发去重 / 工具语义失败信号 / preview 分级 / latest 不被 node-run 污染),tracer.py 470 行,质量门禁全 PASS(custom lint 仅存量 ERROR + 架构树 WARN)。
 
 ## 当前上下文
 
 <!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
-- 本次会话 — `observability/` 基础设施一次性硬化 6 处真问题 + 精简(用户挑选 A+B+C 一次过, C1 全 raise):
+- 本次会话 — `observability/` 基于 30 个真实 run 产物勘查后的 6 项改进,目标:可读性 / 去冗 / 渐进披露 / 错误定位 / 保留原始信息:
+  - **改动 1 `.harness/index.jsonl` run 级索引**(`store.py:append_index` + `_helpers.py:TERMINAL_STATUSES` + `tracer.py:_build_index_entry`):`tracer.mark_status` 在终态(`success/failed/failed_hard_contract/rejected`)时 append 一行 `{run_id, ts, mode, status, entry_node?, fixture_source?, n_llm, n_tool, error_summary?}`。tracer 新增 `_n_llm_total / _n_tool_total / _last_error_summary` 累积字段(跨 interrupt-resume 不重置,只跟随 mark_status 终态收口写入)。30 个 run 找一个昨天那次失败的 regression 不再需要遍历 30 个 meta.json。
+  - **改动 2 同名 `sub_nodes/<self>/` 归属修**(`_helpers.py:attribution_from_metadata` 加 2 行启发式):ReAct 子图初始化期工具调用的 metadata 形态 `langgraph_node="regression"` + `checkpoint_ns="regression:<task_id>"` 会让路径变成 `nodes/regression/sub_nodes/regression/`(双重计数)。修法:若 `namespace[-1].split(":",1)[0] == node` 则把末段剥掉。`data_probe` 的 5 个 sub_nodes 都不与 `data_probe` 同名,启发式不误伤。
+  - **改动 3 ReAct 工具调用双发去重**(`tracer.py:on_tool_start` 入口加 1 行守卫):节点 `@tool` 闭包包裹 MCP 工具时 LangChain 发两次回调(外层 LLM 视角的 tool_call + 内层 MCP 调用),`data_cleaning` run 上 ~22 真实工具调用被记成 43 条 events 行。守卫:若 `parent_run_id in self._tool_starts` 则 return,**保留外层**(LLM 视角,与 `messages.tool_calls` 字节级对齐),丢内层。
+  - **改动 4 工具语义失败信号**(`_helpers.py:is_semantic_tool_failure` + `tracer.py:on_tool_end` 命中分支):Stata `status="failed"` / SQL 错误返回的 ToolMessage 走 `on_tool_end`,timeline 看不到 error。检测 `'"status": "failed"'` / `'"error_kind":` 标记,events.jsonl 加 `outcome="semantic_error"` 字段(`models.py` 加 `ToolOutcome` Literal + `TraceEventSummary.outcome` NotRequired),同步 `append_timeline(event="error", summary=preview, raw_id)` 让 timeline 通道直接醒目。
+  - **改动 5 `preview` 长度分级**(`_helpers.py:TOOL_PREVIEW_LIMIT=800` + `tracer.py:on_tool_end` 两处调用):原 200 字截断对 Stata `xtreg` 命令不够长,`import delimited using "D:/.../merged.csv` 处就截了。LLM 路径仍 200,工具路径升 800。`preview()` 函数签名零变。
+  - **改动 6.1 `latest` 不被 node-run 污染**(`store.py:_update_latest_pointer` 加 mode 参数):30 个 run 全是 node-run 时 `latest` 永远指向最新 node-run,`load_latest("data_cleaning")` 在最近一次 run 是 `regression` 时直接 FileNotFoundError。`mode != "full"` 直接 return。`loader.py` 错误文案补"`latest` 仅由 full-mode 更新"。
+  - **测试更新**(`tests/observability/test_store.py`):`test_updates_latest_pointer` / `test_second_run_overrides_latest` 显式传 `mode="full"`;新增 `test_node_run_does_not_touch_latest` 守住反向不变量。
+  - **未做** — 不压缩 `input/output` 内禀冗余(176KB/run 不构成压力,可读性损失大于磁盘成本);不拆 `latest_full` / `latest_node_run/<node>` 两指针(预设抽象);data_probe 子图归属逻辑零真实样本验证仍然是事实(30 个 run 没有一个 data_probe / mode=full),建议跑一次 `node-run data_probe --from-fixture 01_capital_structure_roa` 拿真实产物验证改动 2/3 的启发式。
+  - **质量门禁**:pytest / ruff lint / ruff format / pyright / import-linter 全 PASS;custom lint 仅存量 ERROR(`probe/pure.py 627 行`)+ 36 WARN(`tracer.py 470` 仍 <500 ERROR 红线;架构树 WARN 是基线)。
+
+- 上次会话 — `observability/` 基础设施一次性硬化 6 处真问题 + 精简(用户挑选 A+B+C 一次过, C1 全 raise):
   - **A1 timeline event Literal 对齐写盘真相**(`models.py:22`):`TimelineEventKind` 删除从未被写过的 `"enter"`,加入实际写入但缺失的 `"interrupt"`(消除 `tracer.py:183` 的 `# type: ignore` 蒙混)。
   - **A2 `RunStore.create` 拒绝撞 run_id**(`store.py:107-118`):`run_dir.mkdir(exist_ok=False)` 包 try,撞 id 时 raise `ValueError("...refusing to overwrite an existing trace")`。原 `exist_ok=True` 是真静默覆盖风险(用户/测试/外部传 run_id 时)。
   - **A3 `HarnessTracer.run()` 复位流式状态**(`tracer.py:91-95`):每次 `run()` 入口清空 `_last_values / _pending_outputs / _llm_starts / _tool_starts / _last_interrupt` 五个字段。原本仅复位 `_last_interrupt`,interrupt-resume 共用 tracer 时存在残留 pending output / 未配对 LLM start 跨 run 错位归属的真实风险。LangGraph resume 后会从 checkpointer 重发完整 `values` chunk,清空安全。

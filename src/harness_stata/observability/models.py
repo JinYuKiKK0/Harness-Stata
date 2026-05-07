@@ -47,6 +47,9 @@ class TimelineEvent(TypedDict):
     error: NotRequired[str]
 
 
+ToolOutcome = Literal["semantic_error"]
+
+
 class TraceEventSummary(TypedDict):
     ts: str
     kind: TraceEventKind
@@ -58,6 +61,7 @@ class TraceEventSummary(TypedDict):
     args_preview: NotRequired[str]
     result_preview: NotRequired[str]
     error: NotRequired[str]
+    outcome: NotRequired[ToolOutcome]
     raw_id: str
 
 

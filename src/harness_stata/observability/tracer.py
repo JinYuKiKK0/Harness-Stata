@@ -30,10 +30,13 @@ from langchain_core.runnables import RunnableConfig
 
 from harness_stata.observability._helpers import (
     INTERRUPT_KEY,
+    TERMINAL_STATUSES,
+    TOOL_PREVIEW_LIMIT,
     attribution_from_metadata,
     coerce_jsonable,
     coerce_namespace,
     extract_token_usage,
+    is_semantic_tool_failure,
     model_name,
     preview,
 )
@@ -46,6 +49,7 @@ if TYPE_CHECKING:
     from langchain_core.outputs import LLMResult
 
     from harness_stata.observability.models import (
+        RunMeta,
         RunStatus,
         TimelineEvent,
         TraceEventSummary,
@@ -65,6 +69,12 @@ class HarnessTracer(BaseCallbackHandler):
 
         self._llm_starts: dict[UUID, dict[str, Any]] = {}
         self._tool_starts: dict[UUID, dict[str, Any]] = {}
+
+        # Run-level counters: cumulative across interrupt/resume,
+        # consumed by ``mark_status`` to populate ``index.jsonl``.
+        self._n_llm_total: int = 0
+        self._n_tool_total: int = 0
+        self._last_error_summary: str | None = None
 
     # ------------------------------------------------------------------
     # Driver-facing API
@@ -113,6 +123,8 @@ class HarnessTracer(BaseCallbackHandler):
         meta = self.store.read_meta()
         meta["status"] = status
         self.store.write_meta(meta)
+        if status in TERMINAL_STATUSES:
+            self.store.append_index(self._build_index_entry(meta))
 
     def append_timeline(self, node: str, event: str, **extra: Any) -> None:
         line: TimelineEvent = {
@@ -123,6 +135,25 @@ class HarnessTracer(BaseCallbackHandler):
             **extra,  # type: ignore[typeddict-item]
         }
         self.store.append_timeline(line)
+        if event == "error":
+            self._last_error_summary = extra.get("error") or extra.get("summary")
+
+    def _build_index_entry(self, meta: RunMeta) -> dict[str, Any]:
+        entry: dict[str, Any] = {
+            "run_id": meta["run_id"],
+            "ts": utc_now_iso(),
+            "mode": meta["mode"],
+            "status": meta["status"],
+            "n_llm": self._n_llm_total,
+            "n_tool": self._n_tool_total,
+        }
+        if entry_node := meta.get("entry_node"):
+            entry["entry_node"] = entry_node
+        if fixture_source := meta.get("fixture_source"):
+            entry["fixture_source"] = fixture_source
+        if self._last_error_summary is not None:
+            entry["error_summary"] = self._last_error_summary
+        return entry
 
     # ------------------------------------------------------------------
     # Stream chunk dispatch
@@ -262,6 +293,7 @@ class HarnessTracer(BaseCallbackHandler):
                 "metadata": start.get("metadata"),
             },
         )
+        self._n_llm_total += 1
 
         attribution = attribution_from_metadata(start.get("metadata"))
         if attribution is None:
@@ -299,6 +331,7 @@ class HarnessTracer(BaseCallbackHandler):
             eid,
             {"kind": "llm_error", "error": str(error), "metadata": start.get("metadata")},
         )
+        self._n_llm_total += 1
 
         attribution = attribution_from_metadata(start.get("metadata"))
         if attribution is None:
@@ -333,6 +366,10 @@ class HarnessTracer(BaseCallbackHandler):
         inputs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        if parent_run_id is not None and parent_run_id in self._tool_starts:
+            # Inner MCP-tool callback fired by a wrapping @tool closure.
+            # Outer (LLM-visible) layer is already tracked; skip the inner.
+            return
         self._tool_starts[run_id] = {
             "started_at": time.monotonic(),
             "metadata": metadata,
@@ -362,6 +399,7 @@ class HarnessTracer(BaseCallbackHandler):
                 "metadata": start.get("metadata"),
             },
         )
+        self._n_tool_total += 1
 
         attribution = attribution_from_metadata(start.get("metadata"))
         if attribution is None:
@@ -374,19 +412,25 @@ class HarnessTracer(BaseCallbackHandler):
         ns, node = attribution
 
         duration_ms = int((time.monotonic() - start["started_at"]) * 1000)
-        self.store.append_node_event(
-            ns,
-            node,
-            {
-                "ts": utc_now_iso(),
-                "kind": "tool",
-                "name": start.get("name") or "tool",
-                "duration_ms": duration_ms,
-                "args_preview": preview(start.get("input")),
-                "result_preview": preview(output),
-                "raw_id": eid,
-            },
-        )
+        result_text = preview(output, limit=TOOL_PREVIEW_LIMIT)
+        summary: TraceEventSummary = {
+            "ts": utc_now_iso(),
+            "kind": "tool",
+            "name": start.get("name") or "tool",
+            "duration_ms": duration_ms,
+            "args_preview": preview(start.get("input"), limit=TOOL_PREVIEW_LIMIT),
+            "result_preview": result_text,
+            "raw_id": eid,
+        }
+        if is_semantic_tool_failure(result_text):
+            summary["outcome"] = "semantic_error"
+            self.append_timeline(
+                node=self._timeline_node_name(ns, node),
+                event="error",
+                summary=result_text,
+                raw_id=eid,
+            )
+        self.store.append_node_event(ns, node, summary)
 
     def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
         start = self._tool_starts.pop(run_id, None)
@@ -402,6 +446,7 @@ class HarnessTracer(BaseCallbackHandler):
                 "error": str(error),
             },
         )
+        self._n_tool_total += 1
 
         attribution = attribution_from_metadata(start.get("metadata"))
         if attribution is None:

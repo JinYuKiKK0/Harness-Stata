@@ -14,7 +14,9 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 PREVIEW_LIMIT = 200
+TOOL_PREVIEW_LIMIT = 800
 INTERRUPT_KEY = "__interrupt__"
+TERMINAL_STATUSES = frozenset({"success", "failed", "failed_hard_contract", "rejected"})
 
 
 def preview(value: object, limit: int = PREVIEW_LIMIT) -> str:
@@ -61,6 +63,10 @@ def attribution_from_metadata(
         return None
     ckpt_ns = metadata.get("checkpoint_ns")
     namespace = tuple(ckpt_ns.split("|")) if isinstance(ckpt_ns, str) and ckpt_ns else ()
+    if namespace and namespace[-1].split(":", 1)[0] == node:
+        # ReAct subgraph init phase: langgraph_node == last namespace parent
+        # name. Stripping prevents nodes/<X>/sub_nodes/<X>/ double-counting.
+        namespace = namespace[:-1]
     return (namespace, node)
 
 
@@ -90,6 +96,22 @@ def extract_token_usage(response_dump: Mapping[str, Any]) -> dict[str, int]:
         if (v := usage.get("output_tokens") or usage.get("completion_tokens")) is not None:
             out["output"] = int(v)
     return out
+
+
+_SEMANTIC_FAILURE_MARKERS = ('"status": "failed"', '"status":"failed"')
+
+
+def is_semantic_tool_failure(result_text: str) -> bool:
+    """Detect tool returns that completed without raising but report failure.
+
+    Stata-Executor's ``ExecutionResult`` and DuckDB ``run_sql`` errors both
+    surface as JSON with ``"status": "failed"`` plus a non-null ``error_kind``.
+    Substring scan over ``result_preview`` is sufficient since the relevant
+    keys appear in the first 800 chars by construction.
+    """
+    if any(m in result_text for m in _SEMANTIC_FAILURE_MARKERS):
+        return True
+    return '"error_kind":' in result_text and '"error_kind": null' not in result_text
 
 
 def coerce_jsonable(value: Any) -> Any:
