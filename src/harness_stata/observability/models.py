@@ -19,7 +19,7 @@ RunStatus = Literal[
     "rejected",
     "failed",
 ]
-TimelineEventKind = Literal["enter", "exit", "error", "resume"]
+TimelineEventKind = Literal["exit", "error", "resume", "interrupt"]
 TraceEventKind = Literal["llm", "tool"]
 
 

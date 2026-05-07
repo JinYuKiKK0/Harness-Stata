@@ -106,9 +106,16 @@ class RunStore:
         """
         root = project_root / harness_dir_name
         run_dir = root / "runs" / meta["run_id"]
-        run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "nodes").mkdir(exist_ok=True)
-        (run_dir / "raw").mkdir(exist_ok=True)
+        run_dir.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            run_dir.mkdir(exist_ok=False)
+        except FileExistsError as exc:
+            raise ValueError(
+                f"run_id {meta['run_id']!r} already exists at {run_dir}; "
+                "refusing to overwrite an existing trace"
+            ) from exc
+        (run_dir / "nodes").mkdir()
+        (run_dir / "raw").mkdir()
         store = cls(root=root, run_id=meta["run_id"])
         store.write_meta(meta)
         store._update_latest_pointer()

@@ -137,7 +137,7 @@ class TestRunStoreTimeline:
         e1: TimelineEvent = {
             "ts": utc_now_iso(),
             "node": "data_cleaning",
-            "event": "enter",
+            "event": "resume",
             "seq": store.next_timeline_seq(),
         }
         e2: TimelineEvent = {

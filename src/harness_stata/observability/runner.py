@@ -69,7 +69,7 @@ class NodeRunner:
 
     def _compile_minimal_graph(self) -> Any:
         builder = StateGraph(WorkflowState)
-        builder.add_node(self.node, NODE_REGISTRY[self.node])  # type: ignore[arg-type]
+        builder.add_node(self.node, NODE_REGISTRY[self.node])
         builder.add_edge(START, self.node)
         builder.add_edge(self.node, END)
         return builder.compile()

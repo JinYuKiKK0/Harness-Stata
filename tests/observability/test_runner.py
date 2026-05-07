@@ -31,7 +31,7 @@ async def _echo_node(state: dict) -> dict[str, Any]:
 
 
 def test_node_runner_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(NODE_REGISTRY, "echo_smoke", _echo_node)  # type: ignore[arg-type]
+    monkeypatch.setitem(NODE_REGISTRY, "echo_smoke", _echo_node)
     monkeypatch.setitem(REQUIRED_FIELDS, "echo_smoke", ("user_request",))
 
     runner = NodeRunner(tmp_path, "echo_smoke")
@@ -70,7 +70,7 @@ def test_node_runner_propagates_node_error(tmp_path: Path, monkeypatch: pytest.M
     async def boom(state: dict) -> dict:
         raise RuntimeError("boom")
 
-    monkeypatch.setitem(NODE_REGISTRY, "boom_node", boom)  # type: ignore[arg-type]
+    monkeypatch.setitem(NODE_REGISTRY, "boom_node", boom)
     monkeypatch.setitem(REQUIRED_FIELDS, "boom_node", ("user_request",))
 
     runner = NodeRunner(tmp_path, "boom_node")

@@ -2,13 +2,27 @@
 
 ## 当前焦点
 
-`descriptive_stats` (F21) / `regression` (F22) 端到端 smoke 在 3 个 fixture 上全部通过,0 次 ReAct 自愈 1 次 run_inline 即终止。
+`observability/` 模块 6 项硬化(A1/A2/A3/B1/C1/C2)落地;tracer.py 经 `_helpers.py` 拆分回到 425 行,硬门禁全 PASS。
 
 ## 当前上下文
 
 <!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
-- 本次会话 — 给 Stata 节点(`descriptive_stats` / `regression`)补 RTF 三线表导出能力 + 跨列行对齐机制约束:
+- 本次会话 — `observability/` 基础设施一次性硬化 6 处真问题 + 精简(用户挑选 A+B+C 一次过, C1 全 raise):
+  - **A1 timeline event Literal 对齐写盘真相**(`models.py:22`):`TimelineEventKind` 删除从未被写过的 `"enter"`,加入实际写入但缺失的 `"interrupt"`(消除 `tracer.py:183` 的 `# type: ignore` 蒙混)。
+  - **A2 `RunStore.create` 拒绝撞 run_id**(`store.py:107-118`):`run_dir.mkdir(exist_ok=False)` 包 try,撞 id 时 raise `ValueError("...refusing to overwrite an existing trace")`。原 `exist_ok=True` 是真静默覆盖风险(用户/测试/外部传 run_id 时)。
+  - **A3 `HarnessTracer.run()` 复位流式状态**(`tracer.py:91-95`):每次 `run()` 入口清空 `_last_values / _pending_outputs / _llm_starts / _tool_starts / _last_interrupt` 五个字段。原本仅复位 `_last_interrupt`,interrupt-resume 共用 tracer 时存在残留 pending output / 未配对 LLM start 跨 run 错位归属的真实风险。LangGraph resume 后会从 checkpointer 重发完整 `values` chunk,清空安全。
+  - **B1 删除 `NodeRunnable` type alias + 4 处 `# type: ignore[dict-item]`**(`registry.py` 全文重写):type alias `Callable[[WorkflowState], Awaitable[dict]]` 太窄,装饰器返回 TypedDict 与 `CompiledStateGraph` 都不满足,导致每个 entry 都要 `# type: ignore` —— 收益负值。改 `NODE_REGISTRY: dict[str, Any]`,顺便删 `runner.py:72` + `tests/observability/test_runner.py` 两处 ignore。
+  - **C1 删除 `_write_node_io` helper 的 try/except**(`tracer.py` 调用点直接 `self.store.write_node_io(...)`):用户挑选"全 raise"——磁盘满/权限错时让业务流程立刻看到 trace 写失败,优于静默丢 trace。同时拆掉了 helper 包装,IO 调用更直接。
+  - **C2 attribution 缺失走 warning + skip events**(`tracer.py` 4 个 callback 方法重排):原本 fallback 到 `((), "<root>")` 会创建奇怪的 `nodes/<root>/events.jsonl` 目录。现:先无条件写 `raw/<evt>.json` 保留可追溯,attribution 缺失则 `logger.warning(...)` + `return`,不写 events.jsonl。raw 与 events 解耦,便于后期排查 non-LangGraph chains。
+  - **`_helpers.py` 拆分 + 重命名为公共名**:C2 引入 ~30 行让 `tracer.py` 涨到 508 行越过 500 硬上限(custom lint ERROR)。把 6 个 stateless helper(`preview` / `coerce_namespace` / `attribution_from_metadata` / `model_name` / `extract_token_usage` / `coerce_jsonable`)+ `PREVIEW_LIMIT` / `INTERRUPT_KEY` 常量搬到 `observability/_helpers.py`(99 行)。tracer.py 回到 425 行(WARN 但未越 ERROR 红线)。helper 函数名同步去除 `_` 前缀(独立模块后不再是模块内私有)。
+  - **测试更新**(`tests/observability/`):仅做契约同步,不为本次硬化新增专项验证。
+    - `test_store.py:138` `event="enter"` → `"resume"`(A1 后 `"enter"` 不再合法)。
+    - `test_tracer.py` import 路径同步:`from harness_stata.observability._helpers import attribution_from_metadata`(原 `_attribution_from_metadata` 已搬迁并去 `_` 前缀)。
+    - `test_runner.py` 删两处 `# type: ignore[arg-type]`(B1 后 NODE_REGISTRY 类型已宽化)。
+  - **质量门禁**:pytest / ruff lint / ruff format / pyright / import-linter 全 PASS;custom lint 仅 1 存量 ERROR(`probe/pure.py 627 行`)+ 37 WARN(基线 36 + 1:`_helpers.py 未在 CLAUDE.md 架构树`,与 observability 目录其他 6 个同类 WARN 性质完全一致,是新增文件的同步产物)。
+
+- 上次会话 — 给 Stata 节点(`descriptive_stats` / `regression`)补 RTF 三线表导出能力 + 跨列行对齐机制约束:
   - **prompt 增量**(机制式正向表述,非禁令清单):两 prompt 各加 `## 表格导出` 段。`descriptive_stats.md` 推荐 `estpost summarize` → `esttab using "<rtf_table_path>", cells(...) booktabs replace`。`regression.md` 写明跨列对齐机制——`esttab` 以变量名为行键合并 `eststo` 结果,缺失单元格自动留空,因此跨 `eststo` 必须用严格相同变量名(case-sensitive),让模型自行推出"别为每列单写表"。`<reminder>` 末尾追加"`rtf_table_path` 已通过 `esttab using` 成功导出"终止条件。
   - **协议层接管 RTF 路径**:文件名规范 `01_descriptive_stats.rtf` / `02_regression.rtf` 由节点常量 `_RTF_FILENAME` 固化,**不进 prompt**(避免双源契约)。`_stata_agent.py` 的 `_resolve_workspace` 改为 public `resolve_stata_workspace`;节点先取 workspace,拼出 `<workspace>/<filename>` 绝对路径,渲染进 HumanMessage `<inputs>` 的 `## rtf_table_path` 字段,再把同一 workspace 传给 `run_stata_agent`。后续 robustness/heterogeneity 节点按 `03_*.rtf` / `04_*.rtf` 顺延即可。
   - **state schema 同步**:`DescStatsReport` / `RegressionResult` 各加 `rtf_table_path: str` 字段;两节点返回值新增 `str(rtf_path)`;`docs/state.md` 字段表更新。

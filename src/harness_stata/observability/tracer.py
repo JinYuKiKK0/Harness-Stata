@@ -9,8 +9,9 @@ Two complementary capture channels feed a single :class:`RunStore`:
 * **LLM / tool events via callback** — inherits :class:`BaseCallbackHandler`;
   ``on_llm_*`` / ``on_tool_*`` write summary lines to
   ``nodes/<active>/events.jsonl`` plus full payloads to ``raw/<evt>.json``.
-  Active-node attribution uses ``metadata.langgraph_node`` (best-effort —
-  failures fall back to the root node).
+  Active-node attribution uses ``metadata.langgraph_node``. When metadata
+  is absent (non-LangGraph chains) the raw payload is still written but
+  the ``events.jsonl`` summary is skipped, with a warning on stderr.
 
 The tracer instance is reusable across multiple ``run()`` invocations on
 the same ``thread_id`` (e.g. interrupt-resume), but each run instance is
@@ -19,7 +20,6 @@ bound to exactly one :class:`RunStore`.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import TYPE_CHECKING, Any
@@ -28,6 +28,15 @@ from uuid import UUID
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.runnables import RunnableConfig
 
+from harness_stata.observability._helpers import (
+    INTERRUPT_KEY,
+    attribution_from_metadata,
+    coerce_jsonable,
+    coerce_namespace,
+    extract_token_usage,
+    model_name,
+    preview,
+)
 from harness_stata.observability.store import RunStore, utc_now_iso
 
 if TYPE_CHECKING:
@@ -37,63 +46,12 @@ if TYPE_CHECKING:
     from langchain_core.outputs import LLMResult
 
     from harness_stata.observability.models import (
-        NodeIOPayload,
         RunStatus,
         TimelineEvent,
         TraceEventSummary,
     )
 
 logger = logging.getLogger(__name__)
-
-PREVIEW_LIMIT = 200
-INTERRUPT_KEY = "__interrupt__"
-
-
-def _preview(value: object, limit: int = PREVIEW_LIMIT) -> str:
-    try:
-        text = json.dumps(value, ensure_ascii=False, default=str)
-    except (TypeError, ValueError):
-        text = str(value)
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1] + "…"
-
-
-def _coerce_namespace(value: object) -> tuple[str, ...]:
-    """LangGraph emits ``()`` for the root graph and ``("parent:id",)`` for
-    subgraph scopes; coerce to a stable tuple of strings."""
-    if not value:
-        return ()
-    if isinstance(value, tuple):
-        return tuple(str(s) for s in value)
-    if isinstance(value, list):
-        return tuple(str(s) for s in value)
-    return ()
-
-
-def _attribution_from_metadata(
-    metadata: Mapping[str, Any] | None,
-) -> tuple[tuple[str, ...], str] | None:
-    """Derive (namespace, node) for LLM/tool event attribution.
-
-    LangGraph injects two metadata fields per node-level chain:
-
-    * ``langgraph_node`` — current node's name
-    * ``checkpoint_ns`` — pipe-separated parent path with the same
-      ``<parent>:<task_id>`` segment format the stream channel uses;
-      empty / absent on root-graph nodes.
-
-    Returns ``None`` if attribution cannot be determined (rare; non-
-    LangGraph chains).
-    """
-    if not metadata:
-        return None
-    node = metadata.get("langgraph_node")
-    if not isinstance(node, str) or not node:
-        return None
-    ckpt_ns = metadata.get("checkpoint_ns")
-    namespace = tuple(ckpt_ns.split("|")) if isinstance(ckpt_ns, str) and ckpt_ns else ()
-    return (namespace, node)
 
 
 class HarnessTracer(BaseCallbackHandler):
@@ -124,7 +82,17 @@ class HarnessTracer(BaseCallbackHandler):
         fired during the run, the returned dict carries ``__interrupt__``
         with the interrupt payload (mirroring ``ainvoke`` semantics) so
         the caller can prompt the user and resume with ``Command``.
+
+        Stream-channel and callback-channel transient state are reset on
+        each call. Resume-after-interrupt reuses the same tracer instance
+        but starts fresh: LangGraph re-emits a complete ``values`` chunk
+        from the checkpoint, so dropping cached values is safe and avoids
+        cross-run leakage of pending outputs / unmatched LLM starts.
         """
+        self._last_values = {}
+        self._pending_outputs = []
+        self._llm_starts = {}
+        self._tool_starts = {}
         self._last_interrupt = None
         merged_config = self._merge_callbacks(config)
 
@@ -174,7 +142,7 @@ class HarnessTracer(BaseCallbackHandler):
         except (ValueError, TypeError):
             logger.warning("HarnessTracer: malformed astream chunk %r", chunk)
             return
-        ns = _coerce_namespace(namespace)
+        ns = coerce_namespace(namespace)
 
         if mode_str == "updates" and isinstance(payload, dict):
             for key, value in payload.items():
@@ -190,14 +158,16 @@ class HarnessTracer(BaseCallbackHandler):
     def _on_node_update(self, namespace: tuple[str, ...], node: str, delta: dict[str, Any]) -> None:
         input_state = dict(self._last_values.get(namespace, {}))
         ns_list = list(namespace)
-        self._write_node_io(
+        self.store.write_node_io(
             {"namespace": ns_list, "node": node, "kind": "input", "state": input_state}
         )
-        self._write_node_io({"namespace": ns_list, "node": node, "kind": "update", "state": delta})
+        self.store.write_node_io(
+            {"namespace": ns_list, "node": node, "kind": "update", "state": delta}
+        )
         self.append_timeline(
             node=self._timeline_node_name(namespace, node),
             event="exit",
-            summary=_preview(list(delta.keys())),
+            summary=preview(list(delta.keys())),
         )
         self._pending_outputs.append((namespace, node))
 
@@ -208,7 +178,7 @@ class HarnessTracer(BaseCallbackHandler):
         remaining: list[tuple[tuple[str, ...], str]] = []
         for ns_pending, node_pending in self._pending_outputs:
             if ns_pending == namespace:
-                self._write_node_io(
+                self.store.write_node_io(
                     {
                         "namespace": list(ns_pending),
                         "node": node_pending,
@@ -219,12 +189,6 @@ class HarnessTracer(BaseCallbackHandler):
             else:
                 remaining.append((ns_pending, node_pending))
         self._pending_outputs = remaining
-
-    def _write_node_io(self, payload: NodeIOPayload) -> None:
-        try:
-            self.store.write_node_io(payload)
-        except OSError as exc:
-            logger.warning("HarnessTracer: write_node_io failed: %s", exc)
 
     @staticmethod
     def _timeline_node_name(namespace: tuple[str, ...], node: str) -> str:
@@ -252,7 +216,7 @@ class HarnessTracer(BaseCallbackHandler):
             "started_at": time.monotonic(),
             "metadata": metadata,
             "messages": [[m.model_dump() for m in row] for row in messages],
-            "model_name": (serialized or {}).get("name") or _model_name(metadata),
+            "model_name": (serialized or {}).get("name") or model_name(metadata),
         }
 
     def on_llm_start(
@@ -270,7 +234,7 @@ class HarnessTracer(BaseCallbackHandler):
             "started_at": time.monotonic(),
             "metadata": metadata,
             "prompts": prompts,
-            "model_name": (serialized or {}).get("name") or _model_name(metadata),
+            "model_name": (serialized or {}).get("name") or model_name(metadata),
         }
 
     def on_llm_end(
@@ -284,16 +248,33 @@ class HarnessTracer(BaseCallbackHandler):
         start = self._llm_starts.pop(run_id, None)
         if start is None:
             return
-        attribution = _attribution_from_metadata(start.get("metadata"))
-        ns, node = attribution if attribution is not None else ((), "<root>")
         eid = self.store.next_event_id()
         try:
             response_dump = response.model_dump()
         except AttributeError:
             response_dump = {"generations": [str(response.generations)]}
-        usage = _extract_token_usage(response_dump)
-        duration_ms = int((time.monotonic() - start["started_at"]) * 1000)
+        self.store.write_raw(
+            eid,
+            {
+                "kind": "llm",
+                "messages": start.get("messages") or start.get("prompts"),
+                "response": response_dump,
+                "metadata": start.get("metadata"),
+            },
+        )
 
+        attribution = attribution_from_metadata(start.get("metadata"))
+        if attribution is None:
+            logger.warning(
+                "HarnessTracer: cannot attribute LLM event (run_id=%s, raw=%s); events.jsonl skipped",
+                run_id,
+                eid,
+            )
+            return
+        ns, node = attribution
+
+        usage = extract_token_usage(response_dump)
+        duration_ms = int((time.monotonic() - start["started_at"]) * 1000)
         summary: TraceEventSummary = {
             "ts": utc_now_iso(),
             "kind": "llm",
@@ -307,29 +288,27 @@ class HarnessTracer(BaseCallbackHandler):
             summary["tokens_out"] = usage["output"]
         if model := start.get("model_name"):
             summary["model"] = model
-
-        self.store.write_raw(
-            eid,
-            {
-                "kind": "llm",
-                "messages": start.get("messages") or start.get("prompts"),
-                "response": response_dump,
-                "metadata": start.get("metadata"),
-            },
-        )
         self.store.append_node_event(ns, node, summary)
 
     def on_llm_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
         start = self._llm_starts.pop(run_id, None)
         if start is None:
             return
-        attribution = _attribution_from_metadata(start.get("metadata"))
-        ns, node = attribution if attribution is not None else ((), "<root>")
         eid = self.store.next_event_id()
         self.store.write_raw(
             eid,
             {"kind": "llm_error", "error": str(error), "metadata": start.get("metadata")},
         )
+
+        attribution = attribution_from_metadata(start.get("metadata"))
+        if attribution is None:
+            logger.warning(
+                "HarnessTracer: cannot attribute LLM error (run_id=%s, raw=%s); events.jsonl skipped",
+                run_id,
+                eid,
+            )
+            return
+        ns, node = attribution
         self.store.append_node_event(
             ns,
             node,
@@ -372,20 +351,29 @@ class HarnessTracer(BaseCallbackHandler):
         start = self._tool_starts.pop(run_id, None)
         if start is None:
             return
-        attribution = _attribution_from_metadata(start.get("metadata"))
-        ns, node = attribution if attribution is not None else ((), "<root>")
         eid = self.store.next_event_id()
-        duration_ms = int((time.monotonic() - start["started_at"]) * 1000)
         self.store.write_raw(
             eid,
             {
                 "kind": "tool",
                 "name": start.get("name"),
                 "input": start.get("input"),
-                "output": _coerce_jsonable(output),
+                "output": coerce_jsonable(output),
                 "metadata": start.get("metadata"),
             },
         )
+
+        attribution = attribution_from_metadata(start.get("metadata"))
+        if attribution is None:
+            logger.warning(
+                "HarnessTracer: cannot attribute tool event (run_id=%s, raw=%s); events.jsonl skipped",
+                run_id,
+                eid,
+            )
+            return
+        ns, node = attribution
+
+        duration_ms = int((time.monotonic() - start["started_at"]) * 1000)
         self.store.append_node_event(
             ns,
             node,
@@ -394,8 +382,8 @@ class HarnessTracer(BaseCallbackHandler):
                 "kind": "tool",
                 "name": start.get("name") or "tool",
                 "duration_ms": duration_ms,
-                "args_preview": _preview(start.get("input")),
-                "result_preview": _preview(output),
+                "args_preview": preview(start.get("input")),
+                "result_preview": preview(output),
                 "raw_id": eid,
             },
         )
@@ -404,8 +392,6 @@ class HarnessTracer(BaseCallbackHandler):
         start = self._tool_starts.pop(run_id, None)
         if start is None:
             return
-        attribution = _attribution_from_metadata(start.get("metadata"))
-        ns, node = attribution if attribution is not None else ((), "<root>")
         eid = self.store.next_event_id()
         self.store.write_raw(
             eid,
@@ -416,6 +402,16 @@ class HarnessTracer(BaseCallbackHandler):
                 "error": str(error),
             },
         )
+
+        attribution = attribution_from_metadata(start.get("metadata"))
+        if attribution is None:
+            logger.warning(
+                "HarnessTracer: cannot attribute tool error (run_id=%s, raw=%s); events.jsonl skipped",
+                run_id,
+                eid,
+            )
+            return
+        ns, node = attribution
         self.store.append_node_event(
             ns,
             node,
@@ -427,45 +423,3 @@ class HarnessTracer(BaseCallbackHandler):
                 "raw_id": eid,
             },
         )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _model_name(metadata: Mapping[str, Any] | None) -> str | None:
-    if not metadata:
-        return None
-    for key in ("ls_model_name", "ls_model", "model_name", "model"):
-        value = metadata.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def _extract_token_usage(response_dump: Mapping[str, Any]) -> dict[str, int]:
-    """Extract input/output token counts from an LLMResult dump if present."""
-    out: dict[str, int] = {}
-    llm_output = response_dump.get("llm_output") or {}
-    usage = (
-        llm_output.get("token_usage")
-        or llm_output.get("usage")
-        or response_dump.get("usage_metadata")
-        or {}
-    )
-    if isinstance(usage, dict):
-        if (v := usage.get("input_tokens") or usage.get("prompt_tokens")) is not None:
-            out["input"] = int(v)
-        if (v := usage.get("output_tokens") or usage.get("completion_tokens")) is not None:
-            out["output"] = int(v)
-    return out
-
-
-def _coerce_jsonable(value: Any) -> Any:
-    """Best-effort JSON normalization for tool outputs."""
-    try:
-        json.dumps(value, default=str)
-        return value
-    except (TypeError, ValueError):
-        return str(value)
