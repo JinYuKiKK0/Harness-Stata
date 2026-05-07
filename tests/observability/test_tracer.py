@@ -22,7 +22,7 @@ def _meta(run_id: str = "20260502T120000Z-tttt") -> RunMeta:
         "run_id": run_id,
         "status": "running",
         "mode": "node-run",
-        "config": {"harness_version": "0.0.0"},
+        "config": {},
     }
 
 

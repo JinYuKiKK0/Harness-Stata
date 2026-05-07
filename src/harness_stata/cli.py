@@ -13,7 +13,6 @@ Two commands:
 from __future__ import annotations
 
 import asyncio
-import importlib.metadata
 import json
 import uuid
 from enum import StrEnum
@@ -40,16 +39,7 @@ __all__ = ["app"]
 
 
 def _config_summary() -> dict[str, str]:
-    """Capture model + version into ``RunMeta.config`` so reading old
-    runs across upgrades makes sense."""
-    try:
-        version = importlib.metadata.version("harness-stata")
-    except importlib.metadata.PackageNotFoundError:
-        version = "unknown"
-    return {
-        "llm_model": get_settings().llm_model_name,
-        "harness_version": version,
-    }
+    return {"llm_model": get_settings().llm_model_name}
 
 
 class DataFrequency(StrEnum):

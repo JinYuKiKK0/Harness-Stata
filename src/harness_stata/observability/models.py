@@ -25,7 +25,6 @@ TraceEventKind = Literal["llm", "tool"]
 
 class RunConfigSummary(TypedDict, total=False):
     llm_model: str
-    harness_version: str
 
 
 class RunMeta(TypedDict):

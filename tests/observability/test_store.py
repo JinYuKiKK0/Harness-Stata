@@ -28,7 +28,7 @@ def _meta(run_id: str, mode: str = "node-run") -> RunMeta:
         "run_id": run_id,
         "status": "running",
         "mode": mode,  # type: ignore[typeddict-item]
-        "config": {"harness_version": "0.1.0"},
+        "config": {},
     }
 
 
@@ -125,7 +125,7 @@ class TestRunStoreMetaRoundtrip:
             "run_id": store.run_id,
             "status": "success",
             "mode": "full",
-            "config": {"harness_version": "0.1.0"},
+            "config": {},
         }
         store.write_meta(updated)
         assert store.read_meta()["status"] == "success"
