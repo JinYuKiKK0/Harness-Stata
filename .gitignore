@@ -33,3 +33,5 @@ downloads/fixtures/*/*
 .harness/
 resources
 scripts/try_data_cleaning.py
+stata-skill
+workspaces

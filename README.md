@@ -50,11 +50,12 @@ src/harness_stata/
 ├── config.py        # 配置
 ├── cli.py           # typer CLI 入口
 ├── studio.py        # langgraph dev / Studio 入口
-├── nodes/           # 8 个主图节点 + _writes / _agent_runner helper
+├── nodes/           # 8 个主图节点 + helper（_writes / _agent_runner / _stata_agent）
 ├── subgraphs/
-│   └── probe/       # 数据探针子图：build_probe_subgraph 工厂 + 6 节点 colocation
+│   └── probe/       # 数据探针子图：build_probe_subgraph 工厂 + 节点 colocation
 ├── prompts/         # Markdown system prompts
-└── clients/         # 外部依赖统一入口（csmar / stata / llm / mcp helper）
+├── clients/         # 外部依赖统一入口（csmar / stata / llm / mcp helper）
+└── observability/   # 节点单跑 + JSONL trace 持久化（不侵入业务代码）
 
 csmar-mcp/          # CSMAR 数据获取 MCP submodule
 stata-executor/     # Stata 执行 MCP submodule
@@ -62,12 +63,13 @@ stata-executor/     # Stata 执行 MCP submodule
 
 ### 分层约束（import-linter 强制）
 
-`cli > graph > nodes > subgraphs > clients`，低层不得反向依赖高层。
+`cli > observability > graph > nodes > subgraphs > clients`，低层不得反向依赖高层。
 
 - `graph.py` 不得直接 import `subgraphs/`
 - `subgraphs/` 不得 import `nodes/`
 - `nodes/` 与 `subgraphs/` 不得直连 `csmar_mcp` / `stata_executor` / `csmarapi`，必须经 `clients/` 的 MCP 协议入口
-- 仅 `clients/llm.py` 可 import `langchain_openai`
+- 仅 `clients/llm.py` 可 import `langchain_openai` / `openai`
+- `subgraphs/probe/pure.py` 不得 import `langchain` / `langgraph`（纯逻辑层无 LLM/编排框架依赖）
 
 ## 快速开始
 

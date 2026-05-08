@@ -35,6 +35,7 @@ harness-stata/
 │   ├── nodes/                               # 主图节点 + 共用 helper
 │   ├── subgraphs/                           # 可复用子图（实现细节）
 │   │   └── probe/                           # data_probe 子图（节点级 colocation + 共享 pure 纯逻辑）
+│   │       └── nodes/                       # probe 子图的节点 colocation
 │   ├── prompts/                             # Markdown 格式 system prompt
 │   ├── clients/                             # 外部依赖统一入口（contextmanager 管理生命周期）
 │   └── observability/                       # 节点单跑 + JSONL trace 持久化（不侵入业务代码）

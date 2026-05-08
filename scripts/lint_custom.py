@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,7 +37,8 @@ SCAN_PY_DIRS = [SRC]
 
 CLAUDE_MD = ROOT / "CLAUDE.md"
 STATE_PY = SRC / "state.py"
-STATE_MD = ROOT / "docs" / "state.md"
+DOCS_DIR = ROOT / "docs"
+STATE_MD = DOCS_DIR / "state.md"
 
 
 Severity = Literal["warn", "error"]
@@ -58,6 +60,35 @@ def _iter_py(directory: Path) -> list[Path]:
     if not directory.exists():
         return []
     return sorted(p for p in directory.rglob("*.py") if p.name != "__init__.py")
+
+
+def _git_tracked(directory: Path) -> tuple[set[str], set[str]]:
+    """返回 directory 下被 git 追踪的 (files, dirs)，路径相对 ROOT、POSIX 分隔。
+
+    被 .gitignore 忽略或未 add 的内容会自动排除——架构树只对 git 视野内的内容负责。
+    """
+    rel = str(directory.relative_to(ROOT)).replace("\\", "/")
+    result = subprocess.run(
+        ["git", "ls-files", "--", rel],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    base_depth = len(rel.split("/"))
+    files: set[str] = set()
+    dirs: set[str] = set()
+    for line in result.stdout.splitlines():
+        path = line.strip()
+        if not path:
+            continue
+        files.add(path)
+        parts = path.split("/")
+        # 只推导到 directory 本身及其内部，不向上越界（避免 src/harness_stata 反推出 src）
+        for i in range(base_depth, len(parts)):
+            dirs.add("/".join(parts[:i]))
+    return files, dirs
 
 
 def _has_real_code(tree: ast.Module) -> bool:
@@ -284,27 +315,50 @@ def check_architecture() -> list[Issue]:
                 )
             )
 
-    # 反向检查：src/harness_stata/ 下的 .py 文件和目录是否都在架构树中
+    # 反向检查 1：src/harness_stata/——只扫到包/子包一级（git 追踪范围内的目录）
     src_prefix = "src/harness_stata"
     tree_src_paths = {p for p in all_paths if p.startswith(src_prefix)}
+    _, src_tracked_dirs = _git_tracked(SRC)
 
-    for item in sorted(SRC.rglob("*")):
-        if "__pycache__" in item.parts:
-            continue
-        if item.name == "__init__.py":
-            continue
-        if item.is_file() and item.suffix != ".py":
-            continue
-
-        rel = str(item.relative_to(ROOT)).replace("\\", "/")
-        if rel not in tree_src_paths:
-            kind = "目录" if item.is_dir() else "文件"
+    for d in sorted(src_tracked_dirs):
+        if d not in tree_src_paths:
             issues.append(
                 Issue(
                     "check_architecture",
                     "warn",
                     CLAUDE_MD,
-                    f"磁盘上的{kind} {rel} 未在 CLAUDE.md 架构树中列出。"
+                    f"磁盘上的目录 {d}/ 未在 CLAUDE.md 架构树中列出。"
+                    f" Fix: 将其添加到 CLAUDE.md 架构树，或确认是否应删除。",
+                )
+            )
+
+    # 反向检查 2：docs/——完整扫描（git 追踪的目录 + .md 文件）
+    docs_prefix = "docs"
+    tree_docs_paths = {p for p in all_paths if p.startswith(docs_prefix)}
+    docs_tracked_files, docs_tracked_dirs = _git_tracked(DOCS_DIR)
+
+    for d in sorted(docs_tracked_dirs):
+        if d not in tree_docs_paths:
+            issues.append(
+                Issue(
+                    "check_architecture",
+                    "warn",
+                    CLAUDE_MD,
+                    f"磁盘上的目录 {d}/ 未在 CLAUDE.md 架构树中列出。"
+                    f" Fix: 将其添加到 CLAUDE.md 架构树，或确认是否应删除。",
+                )
+            )
+
+    for f in sorted(docs_tracked_files):
+        if not f.endswith(".md"):
+            continue
+        if f not in tree_docs_paths:
+            issues.append(
+                Issue(
+                    "check_architecture",
+                    "warn",
+                    CLAUDE_MD,
+                    f"磁盘上的文件 {f} 未在 CLAUDE.md 架构树中列出。"
                     f" Fix: 将其添加到 CLAUDE.md 架构树，或确认是否应删除。",
                 )
             )
