@@ -9,8 +9,6 @@ import pytest
 
 from harness_stata.state import (
     CoreHypothesis,
-    DownloadManifest,
-    DownloadTask,
     EmpiricalSpec,
     ModelPlan,
     ProbeReport,
@@ -136,35 +134,3 @@ def make_probe_report() -> Callable[..., ProbeReport]:
     return _make
 
 
-@pytest.fixture()
-def make_download_manifest() -> Callable[..., DownloadManifest]:
-    """Factory building a :class:`DownloadManifest` with sensible defaults.
-
-    Args:
-        tasks: Optional explicit list of :class:`DownloadTask`; when omitted, a
-            single default task targeting CSMAR.FS_COMBAS is used.
-    """
-
-    def _default_tasks() -> list[DownloadTask]:
-        return [
-            {
-                "database": "CSMAR",
-                "table": "FS_COMBAS",
-                "key_fields": ["SYMBOL", "ACCYEAR"],
-                "variable_fields": ["A001000000", "A002100000"],
-                "variable_names": ["SIZE", "DEBT_RATIO"],
-                "filters": {"start_date": "2015-01-01", "end_date": "2022-12-31"},
-            }
-        ]
-
-    def _make(
-        tasks: list[DownloadTask] | None = None,
-        **overrides: Any,
-    ) -> DownloadManifest:
-        manifest: DownloadManifest = {
-            "items": tasks if tasks is not None else _default_tasks()
-        }
-        manifest.update(overrides)  # pyright: ignore[reportCallIssue]
-        return manifest
-
-    return _make

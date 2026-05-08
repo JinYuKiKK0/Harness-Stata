@@ -2,13 +2,25 @@
 
 ## 当前焦点
 
-`observability/` 6 项面向 Claude Code 调试体验的改进落地(run 级索引 / 同名子目录归属修 / 工具双发去重 / 工具语义失败信号 / preview 分级 / latest 不被 node-run 污染),tracer.py 470 行,质量门禁全 PASS(custom lint 仅存量 ERROR + 架构树 WARN)。
+`/simplify` 全仓死代码审查完成。3 个 Explore agent 共报 8 项 finding,逐项核验后只有 2 项是真实清理(净 -36 行),6 项为误判(职责不同被误判为重复 / 真实 fallback 被误判为反向防御层)。项目处于硬化良好稳定态:state 契约洁净 / config 无死字段 / prompts 防御层精简 / docs 与代码字节对齐。
 
 ## 当前上下文
 
 <!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
-- 本次会话 — `observability/` 基于 30 个真实 run 产物勘查后的 6 项改进,目标:可读性 / 去冗 / 渐进披露 / 错误定位 / 保留原始信息:
+- 本次会话 — 全仓 `/simplify` 死代码清理(净 -36 行,2 处编辑):
+  - **删除未用 fixture `make_download_manifest`**(`tests/nodes/conftest.py:139-170`):32 行死代码 + 缩减 `from harness_stata.state import` 列表(`DownloadManifest, DownloadTask` 不再被引用)。Grep 全仓核验该 fixture 零调用,`data_download` 节点的真实测试走 `_validate` 早返不需要完整 manifest。
+  - **合并 `INTERRUPT_KEY` 单一真理源**(`cli.py:63` 删本地 `_INTERRUPT_KEY = "__interrupt__"`,改 `from harness_stata.observability._helpers import INTERRUPT_KEY`):与 `_helpers.py:18` 的同字面量常量去重,`cli > observability` 是 importlinter 允许方向。
+  - **核验后驳回的 6 项 agent 误报**:
+    1. `_unwrap_mcp_payload` (`_stata_agent.py:63`) ≠ `coerce_jsonable` (`_helpers.py:117`):前者解析 langchain-mcp-adapters 0.2.x list[ContentBlock],后者只 JSON 兜底,职责完全不同。
+    2. `loader.py:51-69` 三 public 方法非真重复:`load_from_run` 多 `wrapper.get("state")` 解包(NodeIOPayload schema),`load_from_fixture` 直接 dict(plain WorkflowState schema)。
+    3. `tracer.py:133/135/168` 三处 `# type: ignore` 是 LangGraph 运行时 dict ↔ TypedDict 的真实类型断层,cast 方案换汤不换药。
+    4. `tracer.py.__init__` + `run()` "双重初始化"是 Python 标准模式 + 显式 reset 让"跨 run 保留 / run 级临时"一目了然,提炼 helper 反而需跳转。
+    5. `test_final_state_not_dumped_without_merged_dataset` 不是反向防御:`_dump_final_state` 的 guard 是 `failed_hard_contract`/`rejected` 路径(无 merged_dataset)的真实 fallback。
+    6. PROGRESS.md 历史段过多不属于死代码,留用户自决。
+  - **质量门禁**:pytest / ruff lint / ruff format / pyright / import-linter 全 PASS;custom lint 仅存量 ERROR(`probe/pure.py 627 行`)+ 37 WARN(基线 36 + cli.py 311 行 WARN——edit 前 314 行已越线,基线计数遗漏,本次无新失败)。
+
+- 上次会话 — `observability/` 基于 30 个真实 run 产物勘查后的 6 项改进,目标:可读性 / 去冗 / 渐进披露 / 错误定位 / 保留原始信息:
   - **改动 1 `.harness/index.jsonl` run 级索引**(`store.py:append_index` + `_helpers.py:TERMINAL_STATUSES` + `tracer.py:_build_index_entry`):`tracer.mark_status` 在终态(`success/failed/failed_hard_contract/rejected`)时 append 一行 `{run_id, ts, mode, status, entry_node?, fixture_source?, n_llm, n_tool, error_summary?}`。tracer 新增 `_n_llm_total / _n_tool_total / _last_error_summary` 累积字段(跨 interrupt-resume 不重置,只跟随 mark_status 终态收口写入)。30 个 run 找一个昨天那次失败的 regression 不再需要遍历 30 个 meta.json。
   - **改动 2 同名 `sub_nodes/<self>/` 归属修**(`_helpers.py:attribution_from_metadata` 加 2 行启发式):ReAct 子图初始化期工具调用的 metadata 形态 `langgraph_node="regression"` + `checkpoint_ns="regression:<task_id>"` 会让路径变成 `nodes/regression/sub_nodes/regression/`(双重计数)。修法:若 `namespace[-1].split(":",1)[0] == node` 则把末段剥掉。`data_probe` 的 5 个 sub_nodes 都不与 `data_probe` 同名,启发式不误伤。
   - **改动 3 ReAct 工具调用双发去重**(`tracer.py:on_tool_start` 入口加 1 行守卫):节点 `@tool` 闭包包裹 MCP 工具时 LangChain 发两次回调(外层 LLM 视角的 tool_call + 内层 MCP 调用),`data_cleaning` run 上 ~22 真实工具调用被记成 43 条 events 行。守卫:若 `parent_run_id in self._tool_starts` 则 return,**保留外层**(LLM 视角,与 `messages.tool_calls` 字节级对齐),丢内层。

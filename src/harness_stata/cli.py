@@ -31,6 +31,7 @@ from harness_stata.observability import (
     NodeRunner,
     RunStore,
 )
+from harness_stata.observability._helpers import INTERRUPT_KEY
 from harness_stata.observability.models import RunMeta
 from harness_stata.observability.store import generate_run_id
 from harness_stata.state import UserRequest, WorkflowState
@@ -60,12 +61,9 @@ def _main() -> None:
 # ---------------------------------------------------------------------------
 
 
-_INTERRUPT_KEY = "__interrupt__"
-
-
 def _interrupt_payload(result: dict[str, Any]) -> dict[str, Any] | None:
     """Extract the first interrupt payload from an ainvoke result, if any."""
-    interrupts = result.get(_INTERRUPT_KEY)
+    interrupts = result.get(INTERRUPT_KEY)
     if not interrupts:
         return None
     first = interrupts[0]
