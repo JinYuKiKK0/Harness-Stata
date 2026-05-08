@@ -2,13 +2,23 @@
 
 ## 当前焦点
 
-`/simplify` 全仓死代码审查完成。3 个 Explore agent 共报 8 项 finding,逐项核验后只有 2 项是真实清理(净 -36 行),6 项为误判(职责不同被误判为重复 / 真实 fallback 被误判为反向防御层)。项目处于硬化良好稳定态:state 契约洁净 / config 无死字段 / prompts 防御层精简 / docs 与代码字节对齐。
+stata-executor MCP 对外契约精简完成。`ExecutionResult` 11→5 字段、`DoctorResult` 9→2 字段,死字段(phase / exit_code / summary / error_signature / failed_command / elapsed_ms 与 doctor 7 个内部状态字段)与只服务它们的 helpers 一并清除。子模块 `5b16647` 净删 213 行 + 26/26 测试通过,主仓 `d480a3b` bump submodule pointer + 修 prompt env_error 不一致 bug + CLI 补 RTF 路径打印。
 
 ## 当前上下文
 
 <!-- 每次任务完成覆写此部分，删除之前会话的内容。保持简洁。 -->
 
-- 本次会话 — 全仓 `/simplify` 死代码清理(净 -36 行,2 处编辑):
+- 本次会话 — stata-executor MCP 字段精简,基于"凡 Agent 不读取的字段即死结果"原则:
+  - **事实底稿(三路 Explore agent + 直读源码确认)**:节点代码消费 `status / error_kind / artifacts`(`_stata_agent.py:167/242/185-204`);LLM prompt 引用 `result_text / diagnostic_excerpt / error_kind`;observability 用 `result_text` 预览 + 正则扫 `error_kind`。其余 6 字段(phase / exit_code / summary / error_signature / failed_command / elapsed_ms)+ doctor 7 字段全无消费方。
+  - **顺手修真实 bug**:两 prompt 与 `_stata_agent.py:136` docstring 让 LLM 对 `error_kind="env_error"` 反应,但该值不在 `ErrorKind` 枚举里——`env_error` 是 `adapters/mcp.py:92-93` 对无效 `STATA_EXECUTOR_EDITION` 环境变量的入口短路机制,LLM 收到的是字符串错误而非 ExecutionResult,**永远看不到这个 error_kind**。
+  - **CLI 补 RTF 路径暴露**:`cli.py:_render_summary` 给 desc/reg 各加一行 `rtf_table_path` 打印——RTF 三线表是研究端核心交付物,此前仅在 `final_state.json` 出现,用户必须翻 JSON 才知文件位置。
+  - **子模块改动**(`5b16647` 净 -213 行):`contract/__init__.py` 收缩 ExecutionResult 与 DoctorResult;`output_parser.py` 删 `build_execution_summary` / `extract_error_signature` / `build_bootstrap_summary` / `extract_last_meaningful_line` 4 个 helper(后两个 plan 写"保留",但 executor 重写后已无调用方,按"现状即完整契约"准则一并删);`extract_diagnostics` 签名从 `tuple[str, str|None, str|None]` 收紧到 `str`(内部仍调 `extract_last_command_block` / `extract_error_signature_with_index` 取 excerpt_start 索引);`executor.py` 重写 `_make_failed_result` 为 3 kwargs(error_kind / result_text / diagnostic_excerpt),原写到 `summary=` 的 input_error / bootstrap_error 文案统一迁到 `diagnostic_excerpt=`;`doctor.py` 整文件重写,`build_doctor_result` 删 `config_source` 参数,三分支统一返 `DoctorResult(ready, errors)`;`mcp.py` output schema 与 doctor 调用同步收缩;README.md 字段表收缩;两个测试文件断言修订(8 处)。
+  - **主仓改动**(`d480a3b`):cli.py 补两行 RTF 打印;两 prompt + 一个 docstring 删 `env_error`;submodule pointer bump。
+  - **质量门禁**:子模块 26/26 测试通过、pyright 错误 20→20 纯行号位移(无新增,baseline 既存代码债);主仓 5/6 项 PASS(pytest / ruff lint / ruff format / pyright / import-linter),custom lint 1 ERROR 是 `probe/pure.py:627` 行——本任务未触此文件,触发因是用户本地未 commit 的 `scripts/lint_custom.py` 规则增强 + 既存文件长度合并效应。
+  - **未做端到端 e2e**:plan "Commit 2 验证 #2" 要求 `uv run -m harness_stata` 跑一次确认 CLI Artifacts 出现 `desc_stats rtf` / `regression rtf` 两行——需真 Stata + LLM,留待用户下次 run 时观察。
+  - **Push 待办**:子模块 `5b16647` 与主仓 `d480a3b` 都未 push。**必须先 push 子模块,再 push 主仓**(`stata-executor && git push` → `cd .. && git push`),否则远端 gitlink 解不到。
+
+- 上次会话 — 全仓 `/simplify` 死代码清理(净 -36 行,2 处编辑):
   - **删除未用 fixture `make_download_manifest`**(`tests/nodes/conftest.py:139-170`):32 行死代码 + 缩减 `from harness_stata.state import` 列表(`DownloadManifest, DownloadTask` 不再被引用)。Grep 全仓核验该 fixture 零调用,`data_download` 节点的真实测试走 `_validate` 早返不需要完整 manifest。
   - **合并 `INTERRUPT_KEY` 单一真理源**(`cli.py:63` 删本地 `_INTERRUPT_KEY = "__interrupt__"`,改 `from harness_stata.observability._helpers import INTERRUPT_KEY`):与 `_helpers.py:18` 的同字面量常量去重,`cli > observability` 是 importlinter 允许方向。
   - **核验后驳回的 6 项 agent 误报**:
