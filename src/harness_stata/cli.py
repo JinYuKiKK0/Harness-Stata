@@ -136,10 +136,14 @@ def _render_summary(state: dict[str, Any]) -> None:
         typer.echo(f"  desc_stats do  : {desc['do_file_path']}")
     if desc.get("log_file_path"):
         typer.echo(f"  desc_stats log : {desc['log_file_path']}")
+    if desc.get("rtf_table_path"):
+        typer.echo(f"  desc_stats rtf : {desc['rtf_table_path']}")
     if reg.get("do_file_path"):
         typer.echo(f"  regression do  : {reg['do_file_path']}")
     if reg.get("log_file_path"):
         typer.echo(f"  regression log : {reg['log_file_path']}")
+    if reg.get("rtf_table_path"):
+        typer.echo(f"  regression rtf : {reg['rtf_table_path']}")
 
 
 def _dump_final_state(state: dict[str, Any]) -> Path | None:

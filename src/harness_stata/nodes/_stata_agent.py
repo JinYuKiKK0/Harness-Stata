@@ -133,7 +133,7 @@ def _make_run_inline_wrapped(
           输出工具上报终止。
         - ``status="failed"`` → 依据 ``error_kind`` 与 ``diagnostic_excerpt`` 修订
           commands 重试。
-        - ``error_kind`` 为 ``bootstrap_error`` 或 ``env_error`` → 基础设施层故障,
+        - ``error_kind`` 为 ``bootstrap_error`` → 基础设施层故障,
           **不要尝试修复 do 代码**,立即调用结构化输出工具上报现场。
         """
         try:

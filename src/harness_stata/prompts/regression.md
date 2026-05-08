@@ -29,7 +29,7 @@
 
 - `status="succeeded"` 且 `result_text` 含完整回归系数表 → 在表中读 `core_hypothesis.variable_name` 的系数符号,进入终止策略。
 - `status="failed"` → 依据 `error_kind` 与 `diagnostic_excerpt` 定位问题:命令解析错(`stata_parse_or_command_error`)→ 修语法或因子变量记号;运行期错(`stata_runtime_error`)→ 检查变量是否被 `xtset` 识别、是否有完全共线导致 drop、面板是否平衡;输入错(`input_error`)→ 检查路径与命令拼写。
-- `error_kind` 为 `bootstrap_error` 或 `env_error` → 基础设施层故障,**继续修改 do 代码无意义**,立即按终止策略上报。
+- `error_kind` 为 `bootstrap_error` → 基础设施层故障,**继续修改 do 代码无意义**,立即按终止策略上报。
 
 每次工具调用必须带来新信息:首轮探查未知,后续轮次修复上一次的具体报错。
 

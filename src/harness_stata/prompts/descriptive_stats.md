@@ -25,7 +25,7 @@
 
 - `status="succeeded"` 且 `result_text` 已包含目标变量的可读统计输出 → 进入终止策略。
 - `status="failed"` → 依据 `error_kind` 与 `diagnostic_excerpt` 定位问题:命令解析错(`stata_parse_or_command_error`)→ 修语法;运行期错(`stata_runtime_error`)→ 检查变量是否存在、`xtset` 是否前置、缺失值是否爆掉命令;输入错(`input_error`)→ 检查路径与命令拼写。
-- `error_kind` 为 `bootstrap_error` 或 `env_error` → 基础设施层故障,**继续修改 do 代码无意义**,立即按终止策略上报。
+- `error_kind` 为 `bootstrap_error` → 基础设施层故障,**继续修改 do 代码无意义**,立即按终止策略上报。
 
 每次工具调用必须带来新信息:首轮探查未知,后续轮次修复上一次的具体报错。
 
